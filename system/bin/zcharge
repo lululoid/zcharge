@@ -1,0 +1,99 @@
+#!/system/bin/sh
+# shellcheck disable=SC3043,SC2046,SC2086,SC3010
+NVBASE=/data/adb
+MODPATH=$NVBASE/modules_update/zcharge
+
+if [ -f $MODPATH/modules/arsenal.sh ]; then
+	. $MODPATH/modules/arsenal.sh
+elif [ -f $NVBASE/modules/zcharge/modules/arsenal.sh ]; then
+	. $NVBASE/modules/zcharge/modules/arsenal.sh
+fi
+
+prn() {
+	echo "  > $1"
+}
+
+for opt in "$@"; do
+	case $opt in
+	*conf)
+		CONF=$opt
+		cp -f $CONF /data/adb/zcharge/zcharge.conf
+		CONF=/data/adb/zcharge/zcharge.conf
+		;;
+	esac
+done
+
+[ -z $CONF ] && CONF=/data/adb/zcharge/zcharge.conf
+[ -z $CONF ] && CONF=$MODPATH/zcharge.conf
+[ -z $CONF ] && echo "> Config not exist" && exit 0
+
+capacity_limit=$(sed -n 's/capacity_limit = //p' $CONF)
+on_switch=$(sed -n 's/charging_switch = \(.*\)/\1/p' $CONF | awk '{print $2}')
+off_switch=$(sed -n 's/charging_switch = \(.*\)/\1/p' $CONF | awk '{print $3}')
+charging_switch=$(sed -n "s/charging_switch = \(.*\) $on_switch $off_switch/\1/p" $CONF)
+if [ -d $MODPATH/system/bin ]; then
+	MODBIN=$MODPATH/system/bin
+elif [ -d $NVBASE/modules/zcharge/system/bin ]; then
+	MODBIN=$NVBASE/modules/zcharge/system/bin
+fi
+
+for opt in "$@"; do
+	case $opt in
+	-es | --enable-svc)
+		[ -z $(getprop zcharge.service.pid) ] && {
+			$MODBIN/zcharge -r
+			limiter_service
+			sed -i 's/\(enabled = \).*/\11/' $CONF
+		} ||
+			prn "zcharge service is already activated"
+		;;
+	-ds | --disable-svc)
+		sed -i 's/\(enabled = \).*/\10/' $CONF
+		kill -9 $(getprop zcharge.service.pid) 2>/dev/null &&
+			prn "zcharge service is killed" ||
+			prn "zcharge service is dead"
+		switch_on
+		resetprop --delete zcharge.service.pid
+		resetprop --delete zcharge.service
+		set_wait 0
+		;;
+	-e | --enable)
+		switch_on && prn "Charging enabled"
+		;;
+	-d | --disable)
+		switch_off && prn "Charging disabled"
+		;;
+	-g | --get)
+		cat $CONF
+		;;
+	-r | --reset)
+		capacity=$(cat /sys/class/power_supply/battery/capacity)
+
+		set_wait 0 && prn "zcharge reset" &&
+			[ $capacity -lt $capacity_limit ] && switch_on &&
+			prn "Charging continue"
+		;;
+	-h | --help)
+		echo "
+    USAGE: zcharge [OPTIONS].. [CONFIG]
+    Could be with or without config
+
+    -es | --enable-svc   enable service 
+    -ds | --disable-svc  disable service 
+    -e  | --enable       enable charging
+    -d  | --disable      disable charging
+    -g  | --get          show config
+    -r  | --reset        reset memory to continue charging without have to wait until capacity drop to recharging_limit
+    -h  | --help         help
+    "
+		;;
+	*conf)
+		true
+		;;
+	*)
+		$MODBIN/zcharge -h
+		;;
+	esac
+done
+
+[ -z $1 ] && $MODBIN/zcharge -h
