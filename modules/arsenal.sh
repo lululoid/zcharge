@@ -14,14 +14,6 @@ notif() {
 	su -lp 2000 -c "cmd notification post -S bigtext -t 'zcharge' 'Tag' '$body'"
 }
 
-switch_off() {
-	echo $off_switch >$charging_switch
-}
-
-switch_on() {
-	echo $on_switch >$charging_switch
-}
-
 limiter_service() {
 	local capacity
 	local recharging_limit
@@ -38,8 +30,10 @@ limiter_service() {
 		wait=$(sed -n 's/wait = //p' $CONF)
 
 		[ $wait -eq 0 ] && {
-			[ $capacity -ge $capacity_limit ] &&
+			[ $capacity -ge $capacity_limit ] && {
+				sleep 30
 				switch_off && set_wait 1
+			}
 			[ $capacity -eq $capacity_limit ] &&
 				notif "Capacity limit is reached. Charging stopped"
 		}
@@ -48,11 +42,16 @@ limiter_service() {
 			switch_on && set_wait 0
 
 		[[ $charging_state = Discharging ]] && {
-			[ -z $reminded ] && [ $capacity -eq $charging_reminder ] &&
-				notif "$charging_reminder% left. Please plug your charger. Cause you care about your battery" &&
-				reminded=true
-			[ -z $reminded0 ] && [ $capacity -eq $((charging_reminder - 5)) ] &&
+			[ -z $reminded ] &&
+				[ $capacity -eq $charging_reminder ] && {
+				sleep 30
+				notif "$charging_reminder% left. Please plug your charger. Cause you care about your battery" && reminded=true
+			}
+
+			[ -z $reminded0 ] && [ $capacity -eq $((charging_reminder - 5)) ] && {
+				sleep 30
 				notif "$capacity% left. This is the last time I remind you for this session" && reminded0=true
+			}
 		}
 		sleep 2
 	done &
