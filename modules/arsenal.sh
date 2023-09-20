@@ -22,11 +22,15 @@ limiter_service() {
 	local charging_state
 	recharging_limit=$(sed -n 's/recharging_limit = //p' $CONF)
 	capacity_limit=$(sed -n 's/capacity_limit = //p' $CONF)
-	charging_reminder=$(sed -n 's/charging_reminder = //p' $CONF)
+	charging_reminder=$(
+		sed -n 's/charging_reminder = //p' $CONF
+	)
 
 	while true; do
 		capacity=$(cat /sys/class/power_supply/battery/capacity)
-		charging_state=$(cat /sys/class/power_supply/battery/status)
+		charging_state=$(
+			cat /sys/class/power_supply/battery/status
+		)
 		wait=$(sed -n 's/wait = //p' $CONF)
 
 		[ $wait -eq 0 ] && {
@@ -45,12 +49,15 @@ limiter_service() {
 			[ -z $reminded ] &&
 				[ $capacity -eq $charging_reminder ] && {
 				sleep 30
-				notif "$charging_reminder% left. Please plug your charger. Cause you care about your battery" && reminded=true
+				notif \
+					"$charging_reminder% left. Please plug your charger." && reminded=true
 			}
 
-			[ -z $reminded0 ] && [ $capacity -eq $((charging_reminder - 5)) ] && {
+			[ -z $reminded0 ] &&
+				[ $capacity -eq $((charging_reminder - 5)) ] && {
 				sleep 30
-				notif "$capacity% left. This is the last time I remind you for this session" && reminded0=true
+				notif \
+					"$capacity% left. This is the last time I remind you for this session" && reminded0=true
 			}
 		}
 		sleep 2

@@ -38,9 +38,19 @@ done
 [ -z $CONF ] && CONF=$MODPATH/zcharge.conf
 [ -z $CONF ] && echo "> Config not exist" && exit 0
 
-on_switch=$(sed -n 's/charging_switch = \(.*\)/\1/p' $CONF | awk '{print $2}')
-off_switch=$(sed -n 's/charging_switch = \(.*\)/\1/p' $CONF | awk '{print $3}')
-charging_switch=$(sed -n "s/charging_switch = \(.*\) $on_switch $off_switch/\1/p" $CONF)
+on_switch=$(
+	sed -n 's/charging_switch = \(.*\)/\1/p' $CONF |
+		awk '{print $2}'
+)
+off_switch=$(
+	sed -n 's/charging_switch = \(.*\)/\1/p' $CONF |
+		awk '{print $3}'
+)
+charging_switch=$(
+	sed -n \
+		"s/charging_switch = \(.*\) $on_switch $off_switch/\1/p" \
+		$CONF
+)
 
 {
 	[ -d $MODPATH/system/bin ] &&
