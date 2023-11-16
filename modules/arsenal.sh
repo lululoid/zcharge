@@ -47,16 +47,18 @@ limiter_service() {
 
 				[ $capacity -eq $capacity_limit ] &&
 					notif \
-						"Capacity limit is reached. Charging stopped"
+						"Capacity limit is reached, charging stopped"
 			fi
 
 			if [ $(read_bat_temp) -ge $temp_limit ]; then
 				switch_off
+				notif "Temperature limit reached, charging stopped"
 				while
 					[ ! $(read_bat_temp) -lt $((temp_limit - 100)) ]
 				do
 					sleep 5
 				done
+				notif "Temperature is $(read_bat_temp), charging continue"
 			fi
 		fi
 
