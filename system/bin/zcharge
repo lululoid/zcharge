@@ -1,11 +1,13 @@
 #!/system/bin/sh
 # shellcheck disable=SC3043,SC2046,SC2086,SC3010
-if [ -z $MODPATH ]; then
-	MODPATH=$MODDIR
-fi
-MODBIN=$MODPATH/system/bin
-
 # shellcheck disable=SC1091
+TEMPDIR=/data/local/tmp/zcharge
+
+if [ -n "$MODDIR" ]; then
+	exec 3>&1 1>"$TEMPDIR/zcharge.log" 2>&1
+  set -x
+fi
+
 . $MODPATH/modules/arsenal.sh
 
 prn() {
@@ -60,7 +62,8 @@ for opt in "$@"; do
 	-ds | --disable-svc)
 		sed -i 's/\(enabled = \).*/\10/' $CONF
 
-		if kill -9 $(getprop zcharge.service.pid) 2>/dev/null; then
+		if kill -9 $(getprop zcharge.service.pid) \
+			2>/dev/null; then
 			prn "zcharge service is killed"
 		else
 			prn "zcharge service is dead"
