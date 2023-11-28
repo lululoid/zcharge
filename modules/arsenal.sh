@@ -18,6 +18,10 @@ read_bat_temp() {
 	cat /sys/class/power_supply/battery/temp
 }
 
+read_capacity() {
+	cat /sys/class/power_supply/battery/capacity
+}
+
 limiter_service() {
 	local capacity
 	local recharging_limit
@@ -32,7 +36,7 @@ limiter_service() {
 	temp_limit=$(sed -n 's/temperature_limit = //p' $CONF)
 
 	while true; do
-		capacity=$(cat /sys/class/power_supply/battery/capacity)
+		capacity=$(read_capacity)
 		charging_state=$(
 			cat /sys/class/power_supply/battery/status
 		)
@@ -51,14 +55,22 @@ limiter_service() {
 			fi
 
 			if [ $(read_bat_temp) -ge $temp_limit ]; then
+				temp=$(read_bat_temp | sed 's/\(.\)\(.\)$/\1,\2/')
+
 				switch_off
-				notif "Temperature limit reached, charging stopped"
-				while
-					[ ! $(read_bat_temp) -lt $((temp_limit - 100)) ]
+				notif "Temperature limit reached($temp°C), charging stopped"
+				until
+					[ $(read_bat_temp) -le $((temp_limit - 10)) ]
 				do
 					sleep 5
 				done
-				notif "Temperature is $(read_bat_temp), charging continue"
+
+				if [ $capacity -lt $capacity_limit ] &&
+					[ $wait -eq 0 ]; then
+					switch_on
+					temp=$(read_bat_temp | sed 's/\(.\)\(.\)$/\1,\2/')
+					notif "Temperature is $temp°C, charging continue"
+				fi
 			fi
 		fi
 
@@ -82,7 +94,7 @@ limiter_service() {
 					"$capacity% left. This is the last time I remind you for this session" && reminded0=true
 			fi
 		fi
-		sleep 2
+		sleep 5
 	done &
 
 	resetprop zcharge.service.pid $! && {

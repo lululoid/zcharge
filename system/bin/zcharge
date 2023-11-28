@@ -5,7 +5,7 @@ TEMPDIR=/data/local/tmp/zcharge
 
 if [ -n "$MODDIR" ]; then
 	exec 3>&1 1>"$TEMPDIR/zcharge.log" 2>&1
-  set -x
+	set -x
 fi
 
 . $MODPATH/modules/arsenal.sh
