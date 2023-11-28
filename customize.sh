@@ -30,3 +30,6 @@ cp $MODPATH/zcharge.conf $MOD_BASE
 
 $MODBIN/zcharge -ds
 $MODBIN/zcharge -es
+
+cp $MODBIN/zcharge $NVBASE/modules/zcharge/system/bin
+cp $MODPATH/modules/arsenal.sh $NVBASE/modules/zcharge/modules

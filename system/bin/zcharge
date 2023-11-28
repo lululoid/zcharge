@@ -8,6 +8,13 @@ if [ -n "$MODDIR" ]; then
 	set -x
 fi
 
+if [ -z $MODPATH ]; then
+	MODDIR=/data/adb/modules/zcharge
+	export MODPATH=$MODDIR
+fi
+
+MODBIN=$MODPATH/system/bin
+
 . $MODPATH/modules/arsenal.sh
 
 prn() {
