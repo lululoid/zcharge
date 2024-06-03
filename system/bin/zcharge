@@ -3,10 +3,12 @@
 # shellcheck disable=SC1091
 TEMPDIR=/data/local/tmp/zcharge
 
-if [ -n "$MODDIR" ]; then
-	exec 3>&1 1>"$TEMPDIR/zcharge.log" 2>&1
-	set -x
-fi
+false && {
+	if [ -n "$MODDIR" ]; then
+		exec 3>&1 1>"$TEMPDIR/zcharge.log" 2>&1
+		set -x
+	fi
+}
 
 if [ -z $MODPATH ]; then
 	MODDIR=/data/adb/modules/zcharge

@@ -11,7 +11,8 @@ set_wait() {
 notif() {
 	local body=$1
 
-	su -lp 2000 -c "cmd notification post -S bigtext -t 'zcharge' 'Tag' '$body'"
+	[ $not = on ] &&
+		su -lp 2000 -c "cmd notification post -S bigtext -t 'zcharge' 'Tag' '$body'"
 }
 
 read_bat_temp() {
@@ -28,12 +29,14 @@ limiter_service() {
 	local capacity_limit
 	local charging_reminder
 	local charging_state
+	local not
 	recharging_limit=$(sed -n 's/recharging_limit = //p' $CONF)
 	capacity_limit=$(sed -n 's/capacity_limit = //p' $CONF)
 	charging_reminder=$(
 		sed -n 's/charging_reminder = //p' $CONF
 	)
 	temp_limit=$(sed -n 's/temperature_limit = //p' $CONF)
+	not=$(sed -n 's/notification = //p' $CONF)
 
 	while true; do
 		capacity=$(read_capacity)
