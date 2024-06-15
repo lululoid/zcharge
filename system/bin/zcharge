@@ -10,25 +10,29 @@ false && {
 	fi
 }
 
-if [ -z $MODPATH ]; then
+[ -z $MODPATH ] && {
 	MODDIR=/data/adb/modules/zcharge
 	export MODPATH=$MODDIR
-fi
+}
 
 MODBIN=$MODPATH/system/bin
 
 . $MODPATH/modules/arsenal.sh
 
 prn() {
-	echo "  > $1"
+	cat <<EOF
+> $1
+EOF
 }
 
 switch_off() {
-	echo $off_switch >$charging_switch
+	[ $charging_switch != $off_switch ] &&
+		echo $off_switch >$charging_switch
 }
 
 switch_on() {
-	echo $on_switch >$charging_switch
+	[ $charging_switch != $on_switch ] &&
+		echo $on_switch >$charging_switch
 }
 
 for opt in "$@"; do
@@ -80,7 +84,6 @@ for opt in "$@"; do
 		switch_on
 		resetprop --delete zcharge.service.pid
 		resetprop --delete zcharge.service
-		set_wait 0
 		;;
 	-e | --enable)
 		switch_on && prn "Charging enabled"
@@ -93,25 +96,19 @@ for opt in "$@"; do
 		;;
 	-r | --reset)
 		capacity=$(cat /sys/class/power_supply/battery/capacity)
-
-		set_wait 0 && prn "zcharge reset" && {
-			capacity_limit=$(sed -n 's/capacity_limit = //p' $CONF)
-			[ $capacity -lt $capacity_limit ] && switch_on &&
-				prn "Charging continue"
-		}
 		;;
 	-h | --help)
 		cat <<EOF
-    USAGE: zcharge [OPTIONS].. [CONFIG]
-    Could be with or without config
+USAGE: zcharge [OPTIONS].. [CONFIG]
+Could be with or without config
 
-    -es | --enable-svc   enable service 
-    -ds | --disable-svc  disable service 
-    -e  | --enable       enable charging
-    -d  | --disable      disable charging
-    -g  | --get          show config
-    -r  | --reset        reset memory to continue charging without have to wait until capacity drop to recharging_limit
-    -h  | --help         help
+  -es | --enable-svc   enable service 
+  -ds | --disable-svc  disable service 
+  -e  | --enable       enable charging
+  -d  | --disable      disable charging
+  -g  | --get          show config
+  -r  | --reset        reset memory to continue charging without have to wait until capacity drop to recharging_limit
+  -h  | --help         help
 EOF
 		;;
 	*conf)
