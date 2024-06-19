@@ -44,6 +44,7 @@ limiter_service() {
 			}
 		fi
 
+		# temperature controller
 		if [ $(read_bat_temp) -ge $temp_limit ]; then
 			temp=$(read_bat_temp | sed 's/\(.\)\(.\)$/\1,\2/')
 

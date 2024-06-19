@@ -22,27 +22,16 @@ compare_num() {
 	local operator=$2
 	local version0=$3
 
-	if [ $operator = ">" ]; then
-		awk \
-			-v version="${version}" \
-			-v version_prev="${version0}" \
-			'BEGIN {
-			  if (version > version_prev) {
-				  exit 0
-			  } else { exit 1 }
-		  }'
-	elif [ $operator = "<" ]; then
-		awk \
-			-v version="${version}" \
-			-v version_prev="${version0}" \
-			'BEGIN {
-			  if (version < version_prev) {
-				  exit 0
-			  } else { exit 1 }
-		  }'
-	else
-		return 1
-	fi
+	awk -v version="${version}" -v version_prev="${version0}" -v op="${operator}" '
+    BEGIN {
+        if (op == ">") {
+            exit version > version_prev ? 0 : 1
+        } else if (op == "<") {
+            exit version < version_prev ? 0 : 1
+        } else {
+            exit 1
+        }
+    }'
 }
 
 MOD_BASE=$NVBASE/zcharge
@@ -51,16 +40,21 @@ mkdir -p $MOD_BASE
 
 CONF_NEW=$MODPATH/zcharge.conf
 [ ! -f /data/adb/zcharge/zcharge.conf ] &&
-	mv $CONF_NEW $MOD_BASE
+	cp $CONF_NEW $MOD_BASE
 
-CONF=/data/adb/zcharge/zcharge.conf
+CONF=$MOD_BASE/zcharge.conf
 prev_v=$(sed -n 's/version=//p' $CONF)
 current_v=$(sed -n 's/version=//p' $CONF_NEW)
 
 if [ -n "$prev_v" ]; then
-	compare_num "$current_v" ">" "$prev_v" &&
+	compare_num "$current_v" ">" "$prev_v" && {
+		cp $MODPATH/zcharge.conf $MOD_BASE/zcharge.conf.old
 		cp $MODPATH/zcharge.conf $MOD_BASE
-else
+		ui_print "
+> Config updated. Old config is 
+$MOD_BASE/zcharge.conf.old"
+	}
+elif [[ -z $prev_v ]]; then
 	cp $MODPATH/zcharge.conf $MOD_BASE
 fi
 
