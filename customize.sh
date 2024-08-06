@@ -11,6 +11,8 @@ unzip -o "$ZIPFILE" -x 'META-INF/*' -d $MODPATH >&2
 set_perm_recursive $MODPATH 0 0 0755 0644
 set_perm_recursive $MODBIN 0 2000 0755 0755
 set_perm_recursive $MODPATH/modules 0 2000 0755 0755
+set_perm_recursive "$MODPATH/system/bin/zcharge" 0 2000 0755 0755
+set_perm_recursive "$MODBIN/zcharge_service.sh" 0 2000 0755 0755
 
 loger() {
 	log=$(echo "$*" | tr -s " ")
@@ -58,9 +60,18 @@ elif [[ -z $prev_v ]]; then
 	cp $MODPATH/zcharge.conf $MOD_BASE
 fi
 
-$MODBIN/zcharge -ds
-$MODBIN/zcharge -es
+# $MODBIN/zcharge -ds
+# $MODBIN/zcharge -es
+if [ -f $CONF ] && ! [ -f $MOD_BASE/zcharge.db ]; then
+	$MODBIN/zcharge --convert $CONF $MOD_BASE/zcharge.db
+else
+	$MODBIN/zcharge --convert $CONF_NEW $MOD_BASE/zcharge.db
+fi
+
+CONF_NEW=$MOD_BASE/zcharge.db
+
+$MODBIN/zcharge --enable $CONF_NEW
+$MODBIN/zcharge &
 
 cp $MODBIN/zcharge $NVBASE/modules/zcharge/system/bin
-cp $MODPATH/modules/arsenal.sh \
-	$NVBASE/modules/zcharge/modules
+cp $MODPATH/modules/arsenal.sh $NVBASE/modules/zcharge/modules

@@ -4,5 +4,4 @@ set -x # Prints commands, prefixing them with a character stored in an environme
 
 . $MODPATH/modules/arsenal.sh
 
-$MODPATH/system/bin/zcharge -ds
-limiter_service
+$MODPATH/system/bin/zcharge &

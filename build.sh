@@ -1,4 +1,14 @@
 #!/bin/bash
+check_root() {
+	local message="$1"
+
+	if su -c "echo"; then
+		false
+	elif [ "$EUID" -ne 0 ]; then
+		echo "$message"
+		exit 1
+	fi
+}
 
 version=$1
 versionCode=$2
@@ -34,14 +44,16 @@ sed -i "s/\(^version=v\)[0-9.]*\(.*\)/\1$version\2/; s/\(^versionCode=\)[0-9]*/\
 module_name=$(sed -n 's/^id=\(.*\)/\1/p' module.prop)
 
 # Create a zip package
-7za a "packages/$module_name-v${version}_$versionCode-beta.zip" \
+package_name="packages/$module_name-v${version}_$versionCode-beta.zip"
+7za a "$package_name" \
 	META-INF \
+	README.md \
+	build.sh \
 	customize.sh \
 	module.prop \
 	modules \
+	packages \
 	service.sh \
 	system \
-	wrapit.sh \
 	zcharge.conf \
-	zcharge_service.sh \
-	system.prop
+	zcharge_service.sh

@@ -2,9 +2,7 @@
 MODDIR=${0%/*}
 export MODDIR
 NVBASE=/data/adb
-CONF=$NVBASE/zcharge/zcharge.conf
-enabled=$(sed -n 's/enabled = //p' $CONF)
+CONF=$NVBASE/zcharge/zcharge.db
 export MODBIN=$MODDIR/system/bin
 
-[ $enabled -eq 1 ] &&
-	$MODBIN/zcharge -es
+$MODBIN/zcharge

@@ -151,42 +151,6 @@ string read_charging_state() {
   return status;
 }
 
-string get_charging_switch_path(sqlite3 *db) {
-  string charging_switch_path;
-  string sql =
-      "SELECT value FROM zcharge_config WHERE key='charging_switch_path';";
-  sqlite3_stmt *stmt;
-
-  int rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0);
-  if (rc != SQLITE_OK) {
-    cerr << "Failed to prepare statement: " << sqlite3_errmsg(db) << endl;
-    return "";
-  }
-
-  rc = sqlite3_step(stmt);
-  if (rc == SQLITE_ROW) {
-    charging_switch_path =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
-  } else {
-    cerr << "No charging_switch_path found in the database" << endl;
-  }
-
-  sqlite3_finalize(stmt);
-  return charging_switch_path;
-}
-
-string get_value_from_charging_switch(const string &path) {
-  ifstream file(path);
-  if (!file.is_open()) {
-    cerr << "Failed to open file: " << path << endl;
-    return "";
-  }
-
-  string value;
-  file >> value;
-  return value;
-}
-
 void switch_off() {
   if (charging_switch_path != off_switch) {
     ofstream file(charging_switch_path);
@@ -201,6 +165,37 @@ void switch_on() {
     file << on_switch;
     loger("Switching on charging");
   }
+}
+
+string get_value_from_db(sqlite3 *db, const string &key) {
+  string value;
+  string sql = "SELECT value FROM zcharge_config WHERE key='" + key + "';";
+  sqlite3_stmt *stmt;
+
+  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) == SQLITE_OK) {
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      value = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+    }
+  }
+
+  sqlite3_finalize(stmt);
+  return value;
+}
+
+void get_charging_switch_path(sqlite3 *db) {
+  charging_switch_path = get_value_from_db(db, "charging_switch_path");
+}
+
+string get_value_from_charging_switch(const string &path) {
+  ifstream file(path);
+  if (!file.is_open()) {
+    cerr << "Failed to open file: " << path << endl;
+    return "";
+  }
+
+  string value;
+  file >> value;
+  return value;
 }
 
 void limiter_service(const string &db_file) {
@@ -254,8 +249,12 @@ void limiter_service(const string &db_file) {
     string charging_state = read_charging_state();
 
     if (charging_state == "Charging") {
+      string charging_switch_value =
+          get_value_from_charging_switch(charging_switch_path);
       if (capacity >= capacity_limit) {
-        switch_off();
+        if (charging_switch_value != off_switch) {
+          switch_off();
+        }
       }
 
       if (read_bat_temp() >= temp_limit) {
@@ -271,7 +270,11 @@ void limiter_service(const string &db_file) {
     }
 
     if (capacity <= recharging_limit) {
-      switch_on();
+      string charging_switch_value =
+          get_value_from_charging_switch(charging_switch_path);
+      if (charging_switch_value != on_switch) {
+        switch_on();
+      }
     }
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
