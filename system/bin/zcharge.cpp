@@ -167,30 +167,43 @@ void switch_on() {
   }
 }
 
-void limiter_service(const string &conf) {
-  int recharging_limit, capacity_limit, temp_limit;
+void limiter_service(const string &db_file) {
+  sqlite3 *db;
+  int rc = sqlite3_open(db_file.c_str(), &db);
+  if (rc) {
+    cerr << "Can't open database: " << sqlite3_errmsg(db) << endl;
+    return;
+  }
 
-  ifstream config(conf);
-  string line;
-  while (getline(config, line)) {
-    if (line.find("recharging_limit") != string::npos)
-      recharging_limit = stoi(line.substr(line.find('=') + 2));
-    else if (line.find("capacity_limit") != string::npos)
-      capacity_limit = stoi(line.substr(line.find('=') + 2));
-    else if (line.find("temperature_limit") != string::npos)
-      temp_limit = stoi(line.substr(line.find('=') + 2));
-    else if (line.find("charging_switch") != string::npos) {
-      std::istringstream iss(line);
-      string key, value;
-      iss >> key >> value;
-      on_switch = value;
-      iss >> value;
-      off_switch = value;
-      charging_switch_path = line.substr(line.find('=') + 2);
-      charging_switch_path = charging_switch_path.substr(
-          0, charging_switch_path.find(on_switch) - 1);
+  int recharging_limit = 0, capacity_limit = 0, temp_limit = 0;
+  string sql = "SELECT key, value FROM zcharge_config";
+  sqlite3_stmt *stmt;
+
+  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) == SQLITE_OK) {
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      string key = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+      string value =
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+
+      if (key == "recharging_limit")
+        recharging_limit = stoi(value);
+      else if (key == "capacity_limit")
+        capacity_limit = stoi(value);
+      else if (key == "temperature_limit")
+        temp_limit = stoi(value);
+      else if (key == "charging_switch_path")
+        charging_switch_path = value;
+      else if (key == "charging_switch_on")
+        on_switch = value;
+      else if (key == "charging_switch_off")
+        off_switch = value;
+      else if (key == "enabled")
+        enabled = (value == "1");
     }
   }
+
+  sqlite3_finalize(stmt);
+  sqlite3_close(db);
 
   loger("recharging_limit: ", recharging_limit);
   loger("capacity_limit: ", capacity_limit);
@@ -199,21 +212,19 @@ void limiter_service(const string &conf) {
   loger("off_switch: " + off_switch);
   loger("charging_switch_path: " + charging_switch_path);
 
-  while (true) {
+  while (enabled) {
     int capacity = read_capacity();
     string charging_state = read_charging_state();
 
     if (charging_state == "Charging" && capacity >= capacity_limit) {
-      std::this_thread::sleep_for(
-          std::chrono::seconds(1)); // Changed sleep duration
+      std::this_thread::sleep_for(std::chrono::seconds(1));
       switch_off();
     }
 
     if (read_bat_temp() >= temp_limit) {
       switch_off();
       while (read_bat_temp() > temp_limit - 10) {
-        std::this_thread::sleep_for(
-            std::chrono::seconds(1)); // Changed sleep duration
+        std::this_thread::sleep_for(std::chrono::seconds(1));
       }
 
       if (capacity < capacity_limit) {
@@ -225,8 +236,7 @@ void limiter_service(const string &conf) {
       switch_on();
     }
 
-    std::this_thread::sleep_for(
-        std::chrono::seconds(1)); // Changed sleep duration
+    std::this_thread::sleep_for(std::chrono::seconds(1));
   }
 }
 
