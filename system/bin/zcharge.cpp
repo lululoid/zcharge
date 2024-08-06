@@ -151,6 +151,42 @@ string read_charging_state() {
   return status;
 }
 
+string get_charging_switch_path(sqlite3 *db) {
+  string charging_switch_path;
+  string sql =
+      "SELECT value FROM zcharge_config WHERE key='charging_switch_path';";
+  sqlite3_stmt *stmt;
+
+  int rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0);
+  if (rc != SQLITE_OK) {
+    cerr << "Failed to prepare statement: " << sqlite3_errmsg(db) << endl;
+    return "";
+  }
+
+  rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    charging_switch_path =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+  } else {
+    cerr << "No charging_switch_path found in the database" << endl;
+  }
+
+  sqlite3_finalize(stmt);
+  return charging_switch_path;
+}
+
+string get_value_from_charging_switch(const string &path) {
+  ifstream file(path);
+  if (!file.is_open()) {
+    cerr << "Failed to open file: " << path << endl;
+    return "";
+  }
+
+  string value;
+  file >> value;
+  return value;
+}
+
 void switch_off() {
   if (charging_switch_path != off_switch) {
     ofstream file(charging_switch_path);
@@ -205,6 +241,7 @@ void limiter_service(const string &db_file) {
   sqlite3_finalize(stmt);
   sqlite3_close(db);
 
+  loger("enabled: ", enabled);
   loger("recharging_limit: ", recharging_limit);
   loger("capacity_limit: ", capacity_limit);
   loger("temperature_limit: ", temp_limit);
@@ -216,19 +253,20 @@ void limiter_service(const string &db_file) {
     int capacity = read_capacity();
     string charging_state = read_charging_state();
 
-    if (charging_state == "Charging" && capacity >= capacity_limit) {
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-      switch_off();
-    }
-
-    if (read_bat_temp() >= temp_limit) {
-      switch_off();
-      while (read_bat_temp() > temp_limit - 10) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+    if (charging_state == "Charging") {
+      if (capacity >= capacity_limit) {
+        switch_off();
       }
 
-      if (capacity < capacity_limit) {
-        switch_on();
+      if (read_bat_temp() >= temp_limit) {
+        switch_off();
+        while (read_bat_temp() > temp_limit - 10) {
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        if (capacity < capacity_limit) {
+          switch_on();
+        }
       }
     }
 
