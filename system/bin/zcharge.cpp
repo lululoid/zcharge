@@ -1,10 +1,12 @@
 #include <android/log.h>
 #include <chrono>
+#include <cstdarg> // For va_list, va_start, va_end
 #include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <sqlite3.h>
 #include <sstream>
 #include <string>
@@ -21,17 +23,25 @@ using namespace std;
 
 string on_switch, off_switch, charging_switch_path;
 bool enabled = true;
+mutex mtx;
 
-void notif(const string &body) {
+void notif(const char *format, ...) {
+  char buffer[256]; // Buffer to hold the formatted string
+
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+
   string cmd =
       "su -lp 2000 -c \"cmd notification post -S bigtext -t 'zcharge' 'Tag' '" +
-      body + "'\"";
+      string(buffer) + "'\"";
   system(cmd.c_str());
 }
 
 void execute_sql(sqlite3 *db, const string &sql) {
-  char *errmsg = 0;
-  int rc = sqlite3_exec(db, sql.c_str(), 0, 0, &errmsg);
+  char *errmsg = nullptr;
+  int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &errmsg);
   if (rc != SQLITE_OK) {
     ALOGE("SQL error: %s", errmsg);
     sqlite3_free(errmsg);
@@ -106,6 +116,10 @@ void conf_to_db(const string &db_file, const string &config_file) {
 
 int read_bat_temp() {
   ifstream file("/sys/class/power_supply/battery/temp");
+  if (!file.is_open()) {
+    ALOGE("Failed to open temperature file");
+    return -1;
+  }
   int temp;
   file >> temp;
   return temp;
@@ -113,6 +127,10 @@ int read_bat_temp() {
 
 int read_capacity() {
   ifstream file("/sys/class/power_supply/battery/capacity");
+  if (!file.is_open()) {
+    ALOGE("Failed to open capacity file");
+    return -1;
+  }
   int capacity;
   file >> capacity;
   return capacity;
@@ -120,22 +138,36 @@ int read_capacity() {
 
 string read_charging_state() {
   ifstream file("/sys/class/power_supply/battery/status");
+  if (!file.is_open()) {
+    ALOGE("Failed to open status file");
+    return "";
+  }
   string status;
   file >> status;
   return status;
 }
 
 void switch_off() {
+  lock_guard<mutex> lock(mtx);
   if (charging_switch_path != off_switch) {
     ofstream file(charging_switch_path);
+    if (!file.is_open()) {
+      ALOGE("Failed to open charging switch path file");
+      return;
+    }
     file << off_switch;
     ALOGD("Switching off charging");
   }
 }
 
 void switch_on() {
+  lock_guard<mutex> lock(mtx);
   if (charging_switch_path != on_switch) {
     ofstream file(charging_switch_path);
+    if (!file.is_open()) {
+      ALOGE("Failed to open charging switch path file");
+      return;
+    }
     file << on_switch;
     ALOGD("Switching on charging");
   }
@@ -146,10 +178,12 @@ string get_value_from_db(sqlite3 *db, const string &key) {
   string sql = "SELECT value FROM zcharge_config WHERE key='" + key + "';";
   sqlite3_stmt *stmt;
 
-  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) == SQLITE_OK) {
+  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
     if (sqlite3_step(stmt) == SQLITE_ROW) {
       value = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
     }
+  } else {
+    ALOGE("Failed to execute query: %s", sqlite3_errmsg(db));
   }
 
   sqlite3_finalize(stmt);
@@ -173,18 +207,22 @@ string get_value_from_charging_switch(const string &path) {
 }
 
 void limiter_service(const string &db_file) {
+  ALOGD("Starting limiter_service");
+
   sqlite3 *db;
   int rc = sqlite3_open(db_file.c_str(), &db);
   if (rc) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
+  ALOGD("Database opened");
 
   int recharging_limit = 0, capacity_limit = 0, temp_limit = 0;
+  bool charging = false;
   string sql = "SELECT key, value FROM zcharge_config";
   sqlite3_stmt *stmt;
 
-  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) == SQLITE_OK) {
+  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
     while (sqlite3_step(stmt) == SQLITE_ROW) {
       string key = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
       string value =
@@ -205,10 +243,14 @@ void limiter_service(const string &db_file) {
       else if (key == "enabled")
         enabled = (value == "1");
     }
+    ALOGD("Configuration loaded");
+  } else {
+    ALOGE("Failed to execute query: %s", sqlite3_errmsg(db));
   }
 
   sqlite3_finalize(stmt);
   sqlite3_close(db);
+  ALOGD("Database closed");
 
   ALOGD("enabled: %d", enabled);
   ALOGD("recharging_limit: %d", recharging_limit);
@@ -217,12 +259,27 @@ void limiter_service(const string &db_file) {
   ALOGD("on_switch: %s", on_switch.c_str());
   ALOGD("off_switch: %s", off_switch.c_str());
   ALOGD("charging_switch_path: %s", charging_switch_path.c_str());
-
+  ALOGD("Entering main loop");
   while (enabled) {
     int capacity = read_capacity();
+    if (capacity == -1) {
+      ALOGD("Failed to read capacity");
+      this_thread::sleep_for(chrono::seconds(1));
+      continue;
+    }
+
     string charging_state = read_charging_state();
+    if (charging_state.empty()) {
+      ALOGD("Failed to read charging state");
+      this_thread::sleep_for(chrono::seconds(1));
+      continue;
+    }
 
     if (charging_state == "Charging") {
+      if (!charging) {
+        ALOGD("Charger plugged");
+        charging = true;
+      }
       string charging_switch_value =
           get_value_from_charging_switch(charging_switch_path);
       if (capacity >= capacity_limit) {
@@ -248,6 +305,20 @@ void limiter_service(const string &db_file) {
         if (charging_switch_value != on_switch) {
           switch_on();
         }
+      }
+    }
+
+    if (charging_state == "Discharging") {
+      if (charging) {
+        ALOGD("Charger unplugged");
+        charging = false;
+      }
+      if (capacity == 30) {
+        notif("Battery is %d%%, charge your phone to increase battery lifespan",
+              capacity);
+      }
+      while (read_charging_state() != "Charging") {
+        this_thread::sleep_for(chrono::seconds(1));
       }
     }
 
