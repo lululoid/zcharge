@@ -24,6 +24,7 @@ using std::string;
 
 // Global declarations
 string on_switch, off_switch, charging_switch_path;
+bool enabled = true; // Global flag to track enabled/disabled state
 
 void loger(const string &log) { cout << "  DEBUG: " << log << endl; }
 
@@ -203,14 +204,16 @@ void limiter_service(const string &conf) {
     string charging_state = read_charging_state();
 
     if (charging_state == "Charging" && capacity >= capacity_limit) {
-      std::this_thread::sleep_for(std::chrono::seconds(30));
+      std::this_thread::sleep_for(
+          std::chrono::seconds(1)); // Changed sleep duration
       switch_off();
     }
 
     if (read_bat_temp() >= temp_limit) {
       switch_off();
       while (read_bat_temp() > temp_limit - 10) {
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::this_thread::sleep_for(
+            std::chrono::seconds(1)); // Changed sleep duration
       }
 
       if (capacity < capacity_limit) {
@@ -222,26 +225,72 @@ void limiter_service(const string &conf) {
       switch_on();
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    std::this_thread::sleep_for(
+        std::chrono::seconds(1)); // Changed sleep duration
   }
 }
 
+void update_config(sqlite3 *db, const string &key, const string &value) {
+  string sql = "INSERT OR REPLACE INTO zcharge_config (key, value) VALUES ('" +
+               key + "', '" + value + "');";
+  execute_sql(db, sql);
+}
+
+void enable_zcharge(const string &db_file) {
+  sqlite3 *db;
+  int rc = sqlite3_open(db_file.c_str(), &db);
+  if (rc) {
+    cerr << "Can't open database: " << sqlite3_errmsg(db) << endl;
+    return;
+  }
+
+  update_config(db, "enabled", "1");
+
+  sqlite3_close(db);
+  cout << "zcharge enabled" << endl;
+}
+
+void disable_zcharge(const string &db_file) {
+  sqlite3 *db;
+  int rc = sqlite3_open(db_file.c_str(), &db);
+  if (rc) {
+    cerr << "Can't open database: " << sqlite3_errmsg(db) << endl;
+    return;
+  }
+
+  update_config(db, "enabled", "0");
+
+  sqlite3_close(db);
+  cout << "zcharge disabled" << endl;
+}
+
 int main(int argc, char *argv[]) {
+  const string default_db_file = "/data/adb/zcharge/zcharge.db";
+
   if (argc == 4 && string(argv[1]) == "--convert") {
     string old_config = argv[2];
     string new_config = argv[3];
 
     // Call conversion function here
-    // Convert old_config to new_config
     conf_to_db(new_config, old_config);
+  } else if (argc == 3 && string(argv[1]) == "--enable") {
+    string db_file = argv[2];
+    enable_zcharge(db_file);
+  } else if (argc == 3 && string(argv[1]) == "--disable") {
+    string db_file = argv[2];
+    disable_zcharge(db_file);
   } else {
-    string conf = "/data/adb/zcharge/zcharge.conf";
+    // Use the default database file if none is provided
+    string db_file = default_db_file;
 
-    std::thread service_thread(limiter_service, conf);
+    // Start the service thread
+    std::thread service_thread(limiter_service, db_file);
 
+    // Print the PID of the service
     pid_t pid = getpid();
     cout << "zcharge service activated with PID " << pid << endl;
 
+    // Wait for the service thread to complete
     service_thread.join();
   }
 
