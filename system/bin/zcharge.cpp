@@ -1,3 +1,4 @@
+#include <android/log.h> // Include Android log header
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -24,15 +25,18 @@ using std::ofstream;
 using std::stoi;
 using std::string;
 
+// Define macros for logging
+#define LOG_TAG "zcharge"
+#define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+
 // Global declarations
 string on_switch, off_switch, charging_switch_path;
 bool enabled = true; // Global flag to track enabled/disabled state
 
-void loger(const string &log) { cout << "  DEBUG: " << log << endl; }
+void loger(const string &log) { ALOGD("%s", log.c_str()); }
 
-void loger(const string &log, int value) {
-  cout << "  DEBUG: " << log << value << endl;
-}
+void loger(const string &log, int value) { ALOGD("%s%d", log.c_str(), value); }
 
 void notif(const string &body) {
   string cmd =
@@ -46,7 +50,7 @@ void execute_sql(sqlite3 *db, const string &sql) {
   char *errmsg = 0;
   int rc = sqlite3_exec(db, sql.c_str(), 0, 0, &errmsg);
   if (rc != SQLITE_OK) {
-    cerr << "SQL error: " << errmsg << endl;
+    ALOGE("SQL error: %s", errmsg);
     sqlite3_free(errmsg);
   }
 }
@@ -107,10 +111,10 @@ void conf_to_db(const string &db_file, const string &config_file) {
   sqlite3 *db;
   int rc = sqlite3_open(db_file.c_str(), &db);
   if (rc) {
-    cerr << "Can't open database: " << sqlite3_errmsg(db) << endl;
+    ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   } else {
-    cout << "Opened database successfully" << endl;
+    ALOGD("Opened database successfully");
   }
 
   // Create the table for configuration parameters
@@ -129,7 +133,7 @@ void conf_to_db(const string &db_file, const string &config_file) {
   // Close the database
   sqlite3_close(db);
 
-  cout << "Configuration inserted into the database successfully" << endl;
+  ALOGD("Configuration inserted into the database successfully");
 }
 
 int read_bat_temp() {
@@ -191,7 +195,7 @@ void get_charging_switch_path(sqlite3 *db) {
 string get_value_from_charging_switch(const string &path) {
   ifstream file(path);
   if (!file.is_open()) {
-    cerr << "Failed to open file: " << path << endl;
+    ALOGE("Failed to open file: %s", path.c_str());
     return "";
   }
 
@@ -204,7 +208,7 @@ void limiter_service(const string &db_file) {
   sqlite3 *db;
   int rc = sqlite3_open(db_file.c_str(), &db);
   if (rc) {
-    cerr << "Can't open database: " << sqlite3_errmsg(db) << endl;
+    ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
 
@@ -293,28 +297,28 @@ void enable_zcharge(const string &db_file) {
   sqlite3 *db;
   int rc = sqlite3_open(db_file.c_str(), &db);
   if (rc) {
-    cerr << "Can't open database: " << sqlite3_errmsg(db) << endl;
+    ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
 
   update_config(db, "enabled", "1");
 
   sqlite3_close(db);
-  cout << "zcharge enabled" << endl;
+  ALOGD("zcharge enabled");
 }
 
 void disable_zcharge(const string &db_file) {
   sqlite3 *db;
   int rc = sqlite3_open(db_file.c_str(), &db);
   if (rc) {
-    cerr << "Can't open database: " << sqlite3_errmsg(db) << endl;
+    ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
 
   update_config(db, "enabled", "0");
 
   sqlite3_close(db);
-  cout << "zcharge disabled" << endl;
+  ALOGD("zcharge disabled");
 }
 
 int main(int argc, char *argv[]) {
