@@ -256,8 +256,8 @@ void limiter_service(const string &db_file) {
 }
 
 void update_config(sqlite3 *db, const string &key, const string &value) {
-  string sql = "INSERT OR REPLACE INTO zcharge_config (key, value) VALUES ('" +
-               key + "', '" + value + "');";
+  string sql = "UPDATE zcharge_config SET value = '" + value +
+               "' WHERE key = '" + key + "';";
   execute_sql(db, sql);
 }
 

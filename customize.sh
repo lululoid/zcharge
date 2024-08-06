@@ -62,14 +62,15 @@ fi
 
 # $MODBIN/zcharge -ds
 # $MODBIN/zcharge -es
-if [ -f $CONF ] && ! [ -f $MOD_BASE/zcharge.db ]; then
+if [ -f $CONF ] && [ ! -f $MOD_BASE/zcharge.db ]; then
 	$MODBIN/zcharge --convert $CONF $MOD_BASE/zcharge.db
-else
+elif [ ! -f $CONF ]; then
 	$MODBIN/zcharge --convert $CONF_NEW $MOD_BASE/zcharge.db
 fi
 
 CONF_NEW=$MOD_BASE/zcharge.db
 
+kill $(pidof zcharge)
 $MODBIN/zcharge --enable $CONF_NEW
 $MODBIN/zcharge &
 
