@@ -267,13 +267,13 @@ void limiter_service(const string &db_file) {
           switch_on();
         }
       }
-    }
 
-    if (capacity <= recharging_limit) {
-      string charging_switch_value =
-          get_value_from_charging_switch(charging_switch_path);
-      if (charging_switch_value != on_switch) {
-        switch_on();
+      if (capacity <= recharging_limit) {
+        string charging_switch_value =
+            get_value_from_charging_switch(charging_switch_path);
+        if (charging_switch_value != on_switch) {
+          switch_on();
+        }
       }
     }
 

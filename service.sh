@@ -5,4 +5,4 @@ NVBASE=/data/adb
 CONF=$NVBASE/zcharge/zcharge.db
 export MODBIN=$MODDIR/system/bin
 
-$MODBIN/zcharge
+$MODBIN/zcharge &
