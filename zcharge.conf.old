@@ -1,0 +1,9 @@
+# zcharge configuration
+enabled = 1
+wait = 0
+capacity_limit = 80
+recharging_limit = 70
+charging_reminder = 30
+# read the temp limit as 41.0 Celcius
+temperature_limit = 410
+charging_switch = /sys/devices/platform/soc/4a88000.i2c/i2c-1/1-0055/power_supply/battery/battery_charging_enabled 1 0
