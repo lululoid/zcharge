@@ -22,6 +22,9 @@ using std::ofstream;
 using std::stoi;
 using std::string;
 
+// Global declarations
+string on_switch, off_switch, charging_switch;
+
 void loger(const string &log) { cout << "  DEBUG: " << log << endl; }
 
 void loger(const string &log, int value) {
@@ -67,8 +70,20 @@ void parse_and_insert_config(sqlite3 *db, const string &config_file) {
       key.erase(key.find_last_not_of(" \t\n\r\f\v") + 1);
       key.erase(0, key.find_first_not_of(" \t\n\r\f\v"));
 
-      // Add the key-value pair to the SQL statement
-      sql += "('" + key + "', '" + value + "'),";
+      // Handle the specific case for charging_switch
+      if (key == "charging_switch") {
+        std::istringstream iss(value);
+        string temp;
+        iss >> temp >> on_switch >> off_switch;
+        // Insert specific values
+        sql += "('charging_switch_on', '" + on_switch + "'),";
+        sql += "('charging_switch_off', '" + off_switch + "'),";
+        // Extract and set charging_switch path
+        charging_switch = value.substr(0, value.find(on_switch) - 1);
+      } else {
+        // Add the key-value pair to the SQL statement
+        sql += "('" + key + "', '" + value + "'),";
+      }
     }
   }
 
@@ -133,8 +148,6 @@ string read_charging_state() {
   file >> status;
   return status;
 }
-
-string on_switch, off_switch, charging_switch;
 
 void switch_off() {
   if (charging_switch != off_switch) {
@@ -212,15 +225,17 @@ void limiter_service(const string &conf) {
   }
 }
 
-int main() {
-  string conf = "/data/adb/zcharge/zcharge.conf";
+int main(int argc, char *argv[]) {
+  if (argc == 4 && string(argv[1]) == "--convert") {
+    string old_config = argv[2];
+    string new_config = argv[3];
 
-  std::thread service_thread(limiter_service, conf);
-
-  pid_t pid = getpid();
-  cout << "zcharge service activated with PID " << pid << endl;
-
-  service_thread.join();
+    // Call conversion function here
+    // Convert old_config to new_config
+    conf_to_db(new_config, old_config);
+  } else {
+    string conf = "/data/adb/zcharge/zcharge.conf";
+  }
 
   return 0;
 }
