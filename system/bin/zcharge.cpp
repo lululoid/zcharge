@@ -23,7 +23,7 @@ using std::stoi;
 using std::string;
 
 // Global declarations
-string on_switch, off_switch, charging_switch;
+string on_switch, off_switch, charging_switch_path;
 
 void loger(const string &log) { cout << "  DEBUG: " << log << endl; }
 
@@ -76,10 +76,11 @@ void parse_and_insert_config(sqlite3 *db, const string &config_file) {
         string temp;
         iss >> temp >> on_switch >> off_switch;
         // Insert specific values
+        sql += "('charging_switch_path', '" + temp + "'),";
         sql += "('charging_switch_on', '" + on_switch + "'),";
         sql += "('charging_switch_off', '" + off_switch + "'),";
-        // Extract and set charging_switch path
-        charging_switch = value.substr(0, value.find(on_switch) - 1);
+        // Extract and set charging_switch_path
+        charging_switch_path = temp;
       } else {
         // Add the key-value pair to the SQL statement
         sql += "('" + key + "', '" + value + "'),";
@@ -150,16 +151,16 @@ string read_charging_state() {
 }
 
 void switch_off() {
-  if (charging_switch != off_switch) {
-    ofstream file(charging_switch);
+  if (charging_switch_path != off_switch) {
+    ofstream file(charging_switch_path);
     file << off_switch;
     loger("Switching off charging");
   }
 }
 
 void switch_on() {
-  if (charging_switch != on_switch) {
-    ofstream file(charging_switch);
+  if (charging_switch_path != on_switch) {
+    ofstream file(charging_switch_path);
     file << on_switch;
     loger("Switching on charging");
   }
@@ -184,9 +185,9 @@ void limiter_service(const string &conf) {
       on_switch = value;
       iss >> value;
       off_switch = value;
-      charging_switch = line.substr(line.find('=') + 2);
-      charging_switch =
-          charging_switch.substr(0, charging_switch.find(on_switch) - 1);
+      charging_switch_path = line.substr(line.find('=') + 2);
+      charging_switch_path = charging_switch_path.substr(
+          0, charging_switch_path.find(on_switch) - 1);
     }
   }
 
@@ -195,7 +196,7 @@ void limiter_service(const string &conf) {
   loger("temperature_limit: ", temp_limit);
   loger("on_switch: " + on_switch);
   loger("off_switch: " + off_switch);
-  loger("charging_switch: " + charging_switch);
+  loger("charging_switch_path: " + charging_switch_path);
 
   while (true) {
     int capacity = read_capacity();
@@ -235,6 +236,13 @@ int main(int argc, char *argv[]) {
     conf_to_db(new_config, old_config);
   } else {
     string conf = "/data/adb/zcharge/zcharge.conf";
+
+    std::thread service_thread(limiter_service, conf);
+
+    pid_t pid = getpid();
+    cout << "zcharge service activated with PID " << pid << endl;
+
+    service_thread.join();
   }
 
   return 0;
