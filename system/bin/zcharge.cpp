@@ -1,42 +1,26 @@
-#include <android/log.h> // Include Android log header
+#include <android/log.h>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <fcntl.h> // Include this header for umask
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <sqlite3.h>
 #include <sstream>
 #include <string>
-#include <sys/stat.h> // Include this header for umask
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <thread>
 #include <unistd.h>
 
 using namespace std;
 
-// Use directives to avoid repeatedly writing std::
-using std::cin;
-using std::cout;
-using std::endl;
-using std::getline;
-using std::ifstream;
-using std::ofstream;
-using std::stoi;
-using std::string;
-
-// Define macros for logging
 #define LOG_TAG "zcharge"
-#define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// Global declarations
 string on_switch, off_switch, charging_switch_path;
-bool enabled = true; // Global flag to track enabled/disabled state
-
-void loger(const string &log) { ALOGD("%s", log.c_str()); }
-
-void loger(const string &log, int value) { ALOGD("%s%d", log.c_str(), value); }
+bool enabled = true;
 
 void notif(const string &body) {
   string cmd =
@@ -45,7 +29,6 @@ void notif(const string &body) {
   system(cmd.c_str());
 }
 
-// Function to execute an SQL statement
 void execute_sql(sqlite3 *db, const string &sql) {
   char *errmsg = 0;
   int rc = sqlite3_exec(db, sql.c_str(), 0, 0, &errmsg);
@@ -55,16 +38,12 @@ void execute_sql(sqlite3 *db, const string &sql) {
   }
 }
 
-// Function to parse the configuration file and insert values into the database
 void parse_and_insert_config(sqlite3 *db, const string &config_file) {
   ifstream infile(config_file);
   string line;
-
-  // Prepare the SQL insert statement
   string sql = "INSERT INTO zcharge_config (key, value) VALUES ";
 
   while (getline(infile, line)) {
-    // Ignore comments and empty lines
     if (line.empty() || line[0] == '#')
       continue;
 
@@ -73,40 +52,32 @@ void parse_and_insert_config(sqlite3 *db, const string &config_file) {
       string key = line.substr(0, pos);
       string value = line.substr(pos + 1);
 
-      // Remove whitespace from key
       key.erase(key.find_last_not_of(" \t\n\r\f\v") + 1);
       key.erase(0, key.find_first_not_of(" \t\n\r\f\v"));
 
-      // Handle the specific case for charging_switch
       if (key == "charging_switch") {
-        std::istringstream iss(value);
+        istringstream iss(value);
         string temp;
         iss >> temp >> on_switch >> off_switch;
-        // Insert specific values
         sql += "('charging_switch_path', '" + temp + "'),";
         sql += "('charging_switch_on', '" + on_switch + "'),";
         sql += "('charging_switch_off', '" + off_switch + "'),";
-        // Extract and set charging_switch_path
         charging_switch_path = temp;
       } else {
-        // Add the key-value pair to the SQL statement
         sql += "('" + key + "', '" + value + "'),";
       }
     }
   }
 
-  // Remove the last comma and add a semicolon
   if (sql.back() == ',') {
     sql.back() = ';';
   } else {
     sql += ';';
   }
 
-  // Execute the SQL statement
   execute_sql(db, sql);
 }
 
-// Function to convert a configuration file to a database
 void conf_to_db(const string &db_file, const string &config_file) {
   sqlite3 *db;
   int rc = sqlite3_open(db_file.c_str(), &db);
@@ -117,7 +88,6 @@ void conf_to_db(const string &db_file, const string &config_file) {
     ALOGD("Opened database successfully");
   }
 
-  // Create the table for configuration parameters
   string create_table_sql = R"(
         CREATE TABLE IF NOT EXISTS zcharge_config (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,10 +97,8 @@ void conf_to_db(const string &db_file, const string &config_file) {
     )";
   execute_sql(db, create_table_sql);
 
-  // Parse the configuration file and insert values into the database
   parse_and_insert_config(db, config_file);
 
-  // Close the database
   sqlite3_close(db);
 
   ALOGD("Configuration inserted into the database successfully");
@@ -161,7 +129,7 @@ void switch_off() {
   if (charging_switch_path != off_switch) {
     ofstream file(charging_switch_path);
     file << off_switch;
-    loger("Switching off charging");
+    ALOGD("Switching off charging");
   }
 }
 
@@ -169,7 +137,7 @@ void switch_on() {
   if (charging_switch_path != on_switch) {
     ofstream file(charging_switch_path);
     file << on_switch;
-    loger("Switching on charging");
+    ALOGD("Switching on charging");
   }
 }
 
@@ -242,13 +210,13 @@ void limiter_service(const string &db_file) {
   sqlite3_finalize(stmt);
   sqlite3_close(db);
 
-  loger("enabled: ", enabled);
-  loger("recharging_limit: ", recharging_limit);
-  loger("capacity_limit: ", capacity_limit);
-  loger("temperature_limit: ", temp_limit);
-  loger("on_switch: " + on_switch);
-  loger("off_switch: " + off_switch);
-  loger("charging_switch_path: " + charging_switch_path);
+  ALOGD("enabled: %d", enabled);
+  ALOGD("recharging_limit: %d", recharging_limit);
+  ALOGD("capacity_limit: %d", capacity_limit);
+  ALOGD("temperature_limit: %d", temp_limit);
+  ALOGD("on_switch: %s", on_switch.c_str());
+  ALOGD("off_switch: %s", off_switch.c_str());
+  ALOGD("charging_switch_path: %s", charging_switch_path.c_str());
 
   while (enabled) {
     int capacity = read_capacity();
@@ -266,7 +234,7 @@ void limiter_service(const string &db_file) {
       if (read_bat_temp() >= temp_limit) {
         switch_off();
         while (read_bat_temp() > temp_limit - 10) {
-          std::this_thread::sleep_for(std::chrono::seconds(1));
+          this_thread::sleep_for(chrono::seconds(1));
         }
 
         if (capacity < capacity_limit) {
@@ -283,7 +251,7 @@ void limiter_service(const string &db_file) {
       }
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    this_thread::sleep_for(chrono::seconds(1));
   }
 }
 
@@ -328,7 +296,6 @@ int main(int argc, char *argv[]) {
     string old_config = argv[2];
     string new_config = argv[3];
 
-    // Call conversion function here
     conf_to_db(new_config, old_config);
   } else if (argc == 3 && string(argv[1]) == "--enable") {
     string db_file = argv[2];
@@ -337,49 +304,36 @@ int main(int argc, char *argv[]) {
     string db_file = argv[2];
     disable_zcharge(db_file);
   } else {
-    // Use the default database file if none is provided
     string db_file = default_db_file;
 
-    // Daemonize the process
     pid_t pid, sid;
 
-    // Fork the parent process
     pid = fork();
     if (pid < 0) {
       exit(EXIT_FAILURE);
     }
 
-    // If we got a good PID, then we can exit the parent process
     if (pid > 0) {
       exit(EXIT_SUCCESS);
     }
 
-    // Change the file mode mask
     umask(0);
 
-    // Open any logs here
-    // ...
-
-    // Create a new SID for the child process
     sid = setsid();
     if (sid < 0) {
       exit(EXIT_FAILURE);
     }
 
-    // Change the current working directory
     if ((chdir("/")) < 0) {
       exit(EXIT_FAILURE);
     }
 
-    // Close out the standard file descriptors
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
 
-    // Start the service thread
-    std::thread service_thread(limiter_service, db_file);
+    thread service_thread(limiter_service, db_file);
 
-    // Wait for the service thread to complete
     service_thread.join();
   }
 
