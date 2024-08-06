@@ -1,11 +1,13 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h> // Include this header for umask
 #include <fstream>
 #include <iostream>
 #include <sqlite3.h>
 #include <sstream>
 #include <string>
+#include <sys/stat.h> // Include this header for umask
 #include <sys/types.h>
 #include <thread>
 #include <unistd.h>
@@ -334,12 +336,44 @@ int main(int argc, char *argv[]) {
     // Use the default database file if none is provided
     string db_file = default_db_file;
 
+    // Daemonize the process
+    pid_t pid, sid;
+
+    // Fork the parent process
+    pid = fork();
+    if (pid < 0) {
+      exit(EXIT_FAILURE);
+    }
+
+    // If we got a good PID, then we can exit the parent process
+    if (pid > 0) {
+      exit(EXIT_SUCCESS);
+    }
+
+    // Change the file mode mask
+    umask(0);
+
+    // Open any logs here
+    // ...
+
+    // Create a new SID for the child process
+    sid = setsid();
+    if (sid < 0) {
+      exit(EXIT_FAILURE);
+    }
+
+    // Change the current working directory
+    if ((chdir("/")) < 0) {
+      exit(EXIT_FAILURE);
+    }
+
+    // Close out the standard file descriptors
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+
     // Start the service thread
     std::thread service_thread(limiter_service, db_file);
-
-    // Print the PID of the service
-    pid_t pid = getpid();
-    cout << "zcharge service activated with PID " << pid << endl;
 
     // Wait for the service thread to complete
     service_thread.join();
