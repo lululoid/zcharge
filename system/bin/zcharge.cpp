@@ -171,7 +171,7 @@ void switch_off() {
         ALOGD("Current is %dmA", current_now);
         return;
       }
-      ALOGD("Waiting 1 second...");
+      ALOGD("Waiting %d second...", i);
       this_thread::sleep_for(chrono::seconds(1));
     }
 
@@ -204,7 +204,7 @@ void switch_on() {
         ALOGD("Current is %dmA", current_now);
         return;
       }
-      ALOGD("Waiting 1 second...");
+      ALOGD("Waiting %d second...", i);
       this_thread::sleep_for(chrono::seconds(1));
     }
     ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
@@ -249,7 +249,7 @@ void limiter_service(const string &db_file) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
-  ALOGD("Database opened");
+  ALOGD("Processing configuration");
   int recharging_limit = 0, capacity_limit = 0, temp_limit = 0;
   bool charging = false;
   string sql = "SELECT key, value FROM zcharge_config";
@@ -280,7 +280,6 @@ void limiter_service(const string &db_file) {
   }
   sqlite3_finalize(stmt);
   sqlite3_close(db);
-  ALOGD("Database closed");
   ALOGD("enabled: %d", enabled);
   ALOGD("recharging_limit: %d%%", recharging_limit);
   ALOGD("capacity_limit: %d%%", capacity_limit);
@@ -401,19 +400,26 @@ int main(int argc, char *argv[]) {
     string old_config = argv[2];
     string new_config = argv[3];
     conf_to_db(new_config, old_config);
+    return 0;
   } else if (argc == 3 && string(argv[1]) == "--enable") {
     string db_file = (argc == 3) ? default_db_file : argv[2];
     enable_zcharge(db_file);
+    return 0;
   } else if (argc == 3 && string(argv[1]) == "--disable") {
     string db_file = (argc == 3) ? default_db_file : argv[2];
     disable_zcharge(db_file);
+    return 0;
   } else if (argc == 2 &&
              (string(argv[1]) == "-h" || string(argv[1]) == "--help")) {
     print_usage();
     return 0;
+  } else if (argc > 1) {
+    // Print usage for invalid arguments
+    print_usage();
+    return EXIT_FAILURE;
   }
 
-  // Daemon setup
+  // Default behavior if no arguments are passed
   string db_file = default_db_file;
   pid_t pid, sid;
 
