@@ -1,7 +1,9 @@
 #include <android/log.h>
+#include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <exception>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -18,8 +20,8 @@ using namespace std;
 #define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-string on_switch, off_switch, charging_switch_path;
-bool enabled = true;
+string on_switch, off_switch, charging_switch_path, charging_switch_value;
+bool enabled, charging;
 mutex mtx;
 
 void notif(const char *format, ...) {
@@ -123,30 +125,85 @@ string read_charging_state() {
   return status;
 }
 
+int read_current_now() {
+  ifstream file("/sys/class/power_supply/battery/current_now");
+  if (!file.is_open()) {
+    ALOGE("Failed to open status file");
+    return -1;
+  }
+  int current_now;
+  file >> current_now;
+  return current_now;
+}
+
+string check_sign(int num) {
+  if (num > 0) {
+    return "+";
+  } else if (num < 0) {
+    return "-";
+  } else {
+    return "0";
+  }
+}
+
 void switch_off() {
   lock_guard<mutex> lock(mtx);
-  if (charging_switch_path != off_switch) {
+  int current_now;
+  int wait_time = 20;
+  if (charging_switch_value != off_switch) {
     ofstream file(charging_switch_path);
+
     if (!file.is_open()) {
       ALOGE("Failed to open charging switch path file");
       return;
     }
     file << off_switch;
-    ALOGD("Switching off charging");
   }
+
+  ALOGD("Charging switch value: %s", charging_switch_value.c_str());
+  ALOGD("Switching off charging");
+  for (int i = 0; i < wait_time; ++i) {
+    current_now = read_current_now();
+    if (check_sign(current_now) == "0") {
+      charging = false;
+      ALOGD("Current is %dmA", current_now);
+      return;
+    }
+    ALOGD("Waiting 1 second...");
+    this_thread::sleep_for(chrono::seconds(1));
+  }
+
+  ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
 }
 
 void switch_on() {
   lock_guard<mutex> lock(mtx);
-  if (charging_switch_path != on_switch) {
+  int current_now;
+  int wait_time = 20;
+  if (charging_switch_value != on_switch) {
     ofstream file(charging_switch_path);
+
     if (!file.is_open()) {
       ALOGE("Failed to open charging switch path file");
       return;
     }
     file << on_switch;
-    ALOGD("Switching on charging");
   }
+
+  ALOGD("Charging switch value: %s", charging_switch_value.c_str());
+  ALOGD("Switching on charging");
+
+  for (int i = 0; i < wait_time; ++i) {
+    current_now = read_current_now();
+    if (check_sign(current_now) == "-") {
+      charging = true;
+      ALOGD("Current is %dmA", current_now);
+      return;
+    }
+    ALOGD("Waiting 1 second...");
+    this_thread::sleep_for(chrono::seconds(1));
+  }
+  ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
 }
 
 string get_value_from_db(sqlite3 *db, const string &key) {
@@ -164,8 +221,9 @@ string get_value_from_db(sqlite3 *db, const string &key) {
   return value;
 }
 
-void get_charging_switch_path(sqlite3 *db) {
+string get_charging_switch_path(sqlite3 *db) {
   charging_switch_path = get_value_from_db(db, "charging_switch_path");
+  return charging_switch_path;
 }
 
 string get_value_from_charging_switch(const string &path) {
@@ -219,13 +277,14 @@ void limiter_service(const string &db_file) {
   sqlite3_close(db);
   ALOGD("Database closed");
   ALOGD("enabled: %d", enabled);
-  ALOGD("recharging_limit: %d", recharging_limit);
-  ALOGD("capacity_limit: %d", capacity_limit);
-  ALOGD("temperature_limit: %d", temp_limit);
+  ALOGD("recharging_limit: %d%%", recharging_limit);
+  ALOGD("capacity_limit: %d%%", capacity_limit);
+  ALOGD("temperature_limit: %.1f°C", temp_limit / 10.0);
   ALOGD("on_switch: %s", on_switch.c_str());
   ALOGD("off_switch: %s", off_switch.c_str());
   ALOGD("charging_switch_path: %s", charging_switch_path.c_str());
   ALOGD("Entering main loop");
+  ALOGD("Current: %dmA", read_current_now());
   while (enabled) {
     int capacity = read_capacity();
     if (capacity == -1) {
@@ -240,16 +299,14 @@ void limiter_service(const string &db_file) {
       continue;
     }
     if (charging_state == "Charging") {
+      charging_switch_value =
+          get_value_from_charging_switch(charging_switch_path);
       if (!charging) {
         ALOGD("Charger plugged");
         charging = true;
       }
-      string charging_switch_value =
-          get_value_from_charging_switch(charging_switch_path);
       if (capacity >= capacity_limit) {
-        if (charging_switch_value != off_switch) {
-          switch_off();
-        }
+        switch_off();
       }
       if (read_bat_temp() >= temp_limit) {
         switch_off();
@@ -261,11 +318,7 @@ void limiter_service(const string &db_file) {
         }
       }
       if (capacity <= recharging_limit) {
-        string charging_switch_value =
-            get_value_from_charging_switch(charging_switch_path);
-        if (charging_switch_value != on_switch) {
-          switch_on();
-        }
+        switch_on();
       }
     }
     if (charging_state == "Discharging") {
