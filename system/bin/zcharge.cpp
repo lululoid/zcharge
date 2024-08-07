@@ -1,8 +1,10 @@
 #include <android/log.h>
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdarg>
 #include <cstdio>
+#include <exception>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -19,8 +21,7 @@ using namespace std;
 #define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-string on_switch, off_switch, charging_switch_path, charging_switch_value,
-    recharging_limit, temp_limit, capacity_limit;
+string on_switch, off_switch, charging_switch_path, charging_switch_value;
 bool enabled, charging;
 mutex mtx;
 
@@ -160,22 +161,20 @@ void switch_off() {
     file << off_switch;
   }
 
-  if (charging_switch_value != off_switch) {
-    ALOGD("Charging switch value: %s", charging_switch_value.c_str());
-    ALOGD("Switching off charging");
-    for (int i = 0; i < wait_time; ++i) {
-      current_now = read_current_now();
-      if (check_sign(current_now) == "0") {
-        charging = false;
-        ALOGD("Current is %dmA", current_now);
-        return;
-      }
-      ALOGD("Waiting 1 second...");
-      this_thread::sleep_for(chrono::seconds(1));
+  ALOGD("Charging switch value: %s", charging_switch_value.c_str());
+  ALOGD("Switching off charging");
+  for (int i = 0; i < wait_time; ++i) {
+    current_now = read_current_now();
+    if (check_sign(current_now) == "0") {
+      charging = false;
+      ALOGD("Current is %dmA", current_now);
+      return;
     }
-
-    ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
+    ALOGD("Waiting 1 second...");
+    this_thread::sleep_for(chrono::seconds(1));
   }
+
+  ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
 }
 
 void switch_on() {
@@ -192,22 +191,20 @@ void switch_on() {
     file << on_switch;
   }
 
-  if (charging_switch_value != on_switch) {
-    ALOGD("Charging switch value: %s", charging_switch_value.c_str());
-    ALOGD("Switching on charging");
+  ALOGD("Charging switch value: %s", charging_switch_value.c_str());
+  ALOGD("Switching on charging");
 
-    for (int i = 0; i < wait_time; ++i) {
-      current_now = read_current_now();
-      if (check_sign(current_now) == "-") {
-        charging = true;
-        ALOGD("Current is %dmA", current_now);
-        return;
-      }
-      ALOGD("Waiting 1 second...");
-      this_thread::sleep_for(chrono::seconds(1));
+  for (int i = 0; i < wait_time; ++i) {
+    current_now = read_current_now();
+    if (check_sign(current_now) == "-") {
+      charging = true;
+      ALOGD("Current is %dmA", current_now);
+      return;
     }
-    ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
+    ALOGD("Waiting 1 second...");
+    this_thread::sleep_for(chrono::seconds(1));
   }
+  ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
 }
 
 string get_value_from_db(sqlite3 *db, const string &key) {
@@ -248,7 +245,7 @@ void limiter_service(const string &db_file) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
-  ALOGD("Processing configuration");
+  ALOGD("Database opened");
   int recharging_limit = 0, capacity_limit = 0, temp_limit = 0;
   bool charging = false;
   string sql = "SELECT key, value FROM zcharge_config";
@@ -270,119 +267,69 @@ void limiter_service(const string &db_file) {
         on_switch = value;
       else if (key == "charging_switch_off")
         off_switch = value;
-      else if (key == "enabled")
-        enabled = (value == "1");
     }
-    ALOGD("Configuration loaded");
+    sqlite3_finalize(stmt);
   } else {
     ALOGE("Failed to execute query: %s", sqlite3_errmsg(db));
   }
-  sqlite3_finalize(stmt);
-  sqlite3_close(db);
-  ALOGD("enabled: %d", enabled);
-  ALOGD("recharging_limit: %d%%", recharging_limit);
-  ALOGD("capacity_limit: %d%%", capacity_limit);
-  ALOGD("temperature_limit: %.1f°C", temp_limit / 10.0);
-  ALOGD("on_switch: %s", on_switch.c_str());
-  ALOGD("off_switch: %s", off_switch.c_str());
-  ALOGD("charging_switch_path: %s", charging_switch_path.c_str());
-  ALOGD("Entering main loop");
-  ALOGD("Current: %dmA", read_current_now());
-  while (enabled) {
-    int capacity = read_capacity();
-    if (capacity == -1) {
-      ALOGD("Failed to read capacity");
-      this_thread::sleep_for(chrono::seconds(1));
-      continue;
-    }
-    string charging_state = read_charging_state();
-    if (charging_state.empty()) {
-      ALOGD("Failed to read charging state");
-      this_thread::sleep_for(chrono::seconds(1));
-      continue;
-    }
-    if (charging_state == "Charging") {
-      charging_switch_value =
-          get_value_from_charging_switch(charging_switch_path);
-      if (!charging) {
-        ALOGD("Charger plugged");
-        charging = true;
-      }
-      if (capacity >= capacity_limit) {
-        switch_off();
-      }
-      if (read_bat_temp() >= temp_limit) {
-        switch_off();
-        while (read_bat_temp() > temp_limit - 10) {
-          this_thread::sleep_for(chrono::seconds(1));
-        }
-        if (capacity < capacity_limit) {
-          switch_on();
-        }
-      }
-      if (capacity <= recharging_limit) {
-        switch_on();
-      }
-    }
-    if (charging_state == "Discharging") {
-      if (charging) {
-        ALOGD("Charger unplugged");
-        charging = false;
-      }
-      if (capacity == 30) {
-        notif("Battery is %d%%, charge your phone to increase battery lifespan",
-              capacity);
-      }
-      while (read_charging_state() != "Charging") {
-        this_thread::sleep_for(chrono::seconds(1));
-      }
-    }
-    this_thread::sleep_for(chrono::seconds(1));
+  if (charging_switch_path.empty()) {
+    charging_switch_path = get_charging_switch_path(db);
   }
-}
 
-void update_config(sqlite3 *db, const string &key, const string &value) {
-  string sql = "UPDATE zcharge_config SET value = '" + value +
-               "' WHERE key = '" + key + "';";
-  execute_sql(db, sql);
+  while (enabled) {
+    int temp = read_bat_temp();
+    int capacity = read_capacity();
+    charging_switch_value =
+        get_value_from_charging_switch(charging_switch_path);
+
+    if (capacity >= capacity_limit || temp >= temp_limit) {
+      if (charging) {
+        switch_off();
+        notif("Charging stopped");
+      }
+    } else if (capacity <= recharging_limit) {
+      if (!charging) {
+        switch_on();
+        notif("Charging started");
+      }
+    }
+    this_thread::sleep_for(chrono::seconds(10));
+  }
+  sqlite3_close(db);
 }
 
 void enable_zcharge(const string &db_file) {
-  sqlite3 *db;
-  if (sqlite3_open(db_file.c_str(), &db)) {
-    ALOGE("Can't open database: %s", sqlite3_errmsg(db));
-    return;
-  }
-  update_config(db, "enabled", "1");
-  sqlite3_close(db);
-  ALOGD("zcharge enabled");
+  enabled = true;
+  ALOGD("ZCharge enabled");
+  limiter_service(db_file);
 }
 
 void disable_zcharge(const string &db_file) {
+  enabled = false;
+  ALOGD("ZCharge disabled");
+  switch_off();
+}
+
+void update_config(const string &db_file, const string &key,
+                   const string &value) {
   sqlite3 *db;
   if (sqlite3_open(db_file.c_str(), &db)) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
-  update_config(db, "enabled", "0");
+  string sql = "UPDATE zcharge_config SET value='" + value + "' WHERE key='" +
+               key + "';";
+  execute_sql(db, sql);
   sqlite3_close(db);
-  ALOGD("zcharge disabled");
+  ALOGD("Configuration updated: %s = %s", key.c_str(), value.c_str());
 }
 
-void stop_service() {
-  // Signal handling to stop the current service
-  raise(SIGTERM);
-}
-
-void restart_zcharge(const string &db_file) {
-  ALOGD("Restarting zcharge with db file: %s", db_file.c_str());
-  stop_service(); // Stop the current service
-  this_thread::sleep_for(
-      chrono::seconds(1)); // Give some time for the service to stop
-
-  // Start a new service
-  thread service_thread(limiter_service, db_file);
-  service_thread.detach(); // Detach the thread to allow it to run independently
+void print_usage() {
+  cout << "Usage:" << endl;
+  cout << "  zcharge --convert <old_config> <new_db>" << endl;
+  cout << "  zcharge --enable <db_file>" << endl;
+  cout << "  zcharge --disable <db_file>" << endl;
+  cout << "  zcharge --update <db_file> <key> <value>" << endl;
 }
 
 int main(int argc, char *argv[]) {
@@ -390,7 +337,7 @@ int main(int argc, char *argv[]) {
 
   // Signal handling
   signal(SIGTERM, [](int signum) {
-    ALOGE("zcharge terminated");
+    ALOGE("Received SIGTERM signal");
     exit(signum);
   });
 
@@ -398,47 +345,19 @@ int main(int argc, char *argv[]) {
     string old_config = argv[2];
     string new_config = argv[3];
     conf_to_db(new_config, old_config);
-  } else if ((argc == 3 || (argc == 2 && string(argv[1]) == "--enable")) &&
-             string(argv[1]) == "--enable") {
-    string db_file = (argc == 3) ? argv[2] : default_db_file;
+  } else if (argc == 3 && string(argv[1]) == "--enable") {
+    string db_file = argv[2];
     enable_zcharge(db_file);
-  } else if ((argc == 3 || (argc == 2 && string(argv[1]) == "--disable")) &&
-             string(argv[1]) == "--disable") {
-    string db_file = (argc == 3) ? argv[2] : default_db_file;
+  } else if (argc == 3 && string(argv[1]) == "--disable") {
+    string db_file = argv[2];
     disable_zcharge(db_file);
-  } else if ((argc == 3 || (argc == 2 && string(argv[1]) == "--restart")) &&
-             string(argv[1]) == "--restart") {
-    string db_file = (argc == 3) ? argv[2] : default_db_file;
-    restart_zcharge(db_file);
+  } else if (argc == 5 && string(argv[1]) == "--update") {
+    string db_file = argv[2];
+    string key = argv[3];
+    string value = argv[4];
+    update_config(db_file, key, value);
   } else {
-    string db_file = default_db_file;
-    pid_t pid, sid;
-
-    pid = fork();
-    if (pid < 0) {
-      exit(EXIT_FAILURE);
-    }
-    if (pid > 0) {
-      exit(EXIT_SUCCESS);
-    }
-
-    umask(0);
-
-    sid = setsid();
-    if (sid < 0) {
-      exit(EXIT_FAILURE);
-    }
-
-    if ((chdir("/")) < 0) {
-      exit(EXIT_FAILURE);
-    }
-
-    close(STDIN_FILENO);
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
-
-    thread service_thread(limiter_service, db_file);
-    service_thread.join();
+    print_usage();
   }
 
   return 0;
