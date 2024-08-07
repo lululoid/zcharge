@@ -3,6 +3,7 @@ MODDIR=${0%/*}
 export MODDIR
 NVBASE=/data/adb
 CONF=$NVBASE/zcharge/zcharge.db
-export MODBIN=$MODDIR/system/bin
+MOD_BASE=$NVBASE/zcharge
 
-$MODBIN/zcharge &
+$MODBIN/zcharge
+logcat --pid=$(pidof zcharge) --file=$MOD_BASE/zcharge.log

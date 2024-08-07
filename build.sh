@@ -53,6 +53,5 @@ package_name="packages/$module_name-v${version}_$versionCode-beta.zip"
 	module.prop \
 	modules \
 	service.sh \
-	system \
-	zcharge.conf \
-	zcharge_service.sh
+	system/bin/zcharge \
+	zcharge.conf

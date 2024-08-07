@@ -72,7 +72,7 @@ CONF_NEW=$MOD_BASE/zcharge.db
 
 kill $(pidof zcharge)
 $MODBIN/zcharge --enable $CONF_NEW
-$MODBIN/zcharge &
-
+$MODBIN/zcharge
+cat $MOD_BASE/zcharge.log
 cp $MODBIN/zcharge $NVBASE/modules/zcharge/system/bin
 cp $MODPATH/modules/arsenal.sh $NVBASE/modules/zcharge/modules
