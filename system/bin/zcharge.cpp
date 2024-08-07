@@ -1,10 +1,8 @@
 #include <android/log.h>
-#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdarg>
 #include <cstdio>
-#include <exception>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -21,7 +19,8 @@ using namespace std;
 #define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-string on_switch, off_switch, charging_switch_path, charging_switch_value;
+string on_switch, off_switch, charging_switch_path, charging_switch_value,
+    recharging_limit, temp_limit, capacity_limit;
 bool enabled, charging;
 mutex mtx;
 
@@ -161,8 +160,6 @@ void switch_off() {
     file << off_switch;
   }
 
-  // Somebody explain why above code is not executed
-  // when I ise one if
   if (charging_switch_value != off_switch) {
     ALOGD("Charging switch value: %s", charging_switch_value.c_str());
     ALOGD("Switching off charging");
@@ -251,7 +248,7 @@ void limiter_service(const string &db_file) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
-  ALOGD("Database opened");
+  ALOGD("Processing configuration");
   int recharging_limit = 0, capacity_limit = 0, temp_limit = 0;
   bool charging = false;
   string sql = "SELECT key, value FROM zcharge_config";
@@ -282,7 +279,6 @@ void limiter_service(const string &db_file) {
   }
   sqlite3_finalize(stmt);
   sqlite3_close(db);
-  ALOGD("Database closed");
   ALOGD("enabled: %d", enabled);
   ALOGD("recharging_limit: %d%%", recharging_limit);
   ALOGD("capacity_limit: %d%%", capacity_limit);
@@ -373,12 +369,28 @@ void disable_zcharge(const string &db_file) {
   ALOGD("zcharge disabled");
 }
 
+void stop_service() {
+  // Signal handling to stop the current service
+  raise(SIGTERM);
+}
+
+void restart_zcharge(const string &db_file) {
+  ALOGD("Restarting zcharge with db file: %s", db_file.c_str());
+  stop_service(); // Stop the current service
+  this_thread::sleep_for(
+      chrono::seconds(1)); // Give some time for the service to stop
+
+  // Start a new service
+  thread service_thread(limiter_service, db_file);
+  service_thread.detach(); // Detach the thread to allow it to run independently
+}
+
 int main(int argc, char *argv[]) {
   const string default_db_file = "/data/adb/zcharge/zcharge.db";
 
   // Signal handling
   signal(SIGTERM, [](int signum) {
-    ALOGE("zcharge closed");
+    ALOGE("zcharge terminated");
     exit(signum);
   });
 
@@ -386,12 +398,18 @@ int main(int argc, char *argv[]) {
     string old_config = argv[2];
     string new_config = argv[3];
     conf_to_db(new_config, old_config);
-  } else if (argc == 3 && string(argv[1]) == "--enable") {
-    string db_file = argv[2];
+  } else if ((argc == 3 || (argc == 2 && string(argv[1]) == "--enable")) &&
+             string(argv[1]) == "--enable") {
+    string db_file = (argc == 3) ? argv[2] : default_db_file;
     enable_zcharge(db_file);
-  } else if (argc == 3 && string(argv[1]) == "--disable") {
-    string db_file = argv[2];
+  } else if ((argc == 3 || (argc == 2 && string(argv[1]) == "--disable")) &&
+             string(argv[1]) == "--disable") {
+    string db_file = (argc == 3) ? argv[2] : default_db_file;
     disable_zcharge(db_file);
+  } else if ((argc == 3 || (argc == 2 && string(argv[1]) == "--restart")) &&
+             string(argv[1]) == "--restart") {
+    string db_file = (argc == 3) ? argv[2] : default_db_file;
+    restart_zcharge(db_file);
   } else {
     string db_file = default_db_file;
     pid_t pid, sid;
