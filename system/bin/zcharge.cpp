@@ -1,6 +1,7 @@
 #include <android/log.h>
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdarg>
 #include <cstdio>
 #include <exception>
@@ -81,12 +82,12 @@ void conf_to_db(const string &db_file, const string &config_file) {
   }
   ALOGD("Opened database successfully");
   execute_sql(db, R"(
-    CREATE TABLE IF NOT EXISTS zcharge_config (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      key TEXT NOT NULL,
-      value TEXT NOT NULL
-    );
-  )");
+        CREATE TABLE IF NOT EXISTS zcharge_config (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL
+        );
+    )");
   parse_and_insert_config(db, config_file);
   sqlite3_close(db);
   ALOGD("Configuration inserted into the database successfully");
@@ -160,20 +161,24 @@ void switch_off() {
     file << off_switch;
   }
 
-  ALOGD("Charging switch value: %s", charging_switch_value.c_str());
-  ALOGD("Switching off charging");
-  for (int i = 0; i < wait_time; ++i) {
-    current_now = read_current_now();
-    if (check_sign(current_now) == "0") {
-      charging = false;
-      ALOGD("Current is %dmA", current_now);
-      return;
+  // Somebody explain why above code is not executed
+  // when I ise one if
+  if (charging_switch_value != off_switch) {
+    ALOGD("Charging switch value: %s", charging_switch_value.c_str());
+    ALOGD("Switching off charging");
+    for (int i = 0; i < wait_time; ++i) {
+      current_now = read_current_now();
+      if (check_sign(current_now) == "0") {
+        charging = false;
+        ALOGD("Current is %dmA", current_now);
+        return;
+      }
+      ALOGD("Waiting 1 second...");
+      this_thread::sleep_for(chrono::seconds(1));
     }
-    ALOGD("Waiting 1 second...");
-    this_thread::sleep_for(chrono::seconds(1));
-  }
 
-  ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
+    ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
+  }
 }
 
 void switch_on() {
@@ -190,20 +195,22 @@ void switch_on() {
     file << on_switch;
   }
 
-  ALOGD("Charging switch value: %s", charging_switch_value.c_str());
-  ALOGD("Switching on charging");
+  if (charging_switch_value != on_switch) {
+    ALOGD("Charging switch value: %s", charging_switch_value.c_str());
+    ALOGD("Switching on charging");
 
-  for (int i = 0; i < wait_time; ++i) {
-    current_now = read_current_now();
-    if (check_sign(current_now) == "-") {
-      charging = true;
-      ALOGD("Current is %dmA", current_now);
-      return;
+    for (int i = 0; i < wait_time; ++i) {
+      current_now = read_current_now();
+      if (check_sign(current_now) == "-") {
+        charging = true;
+        ALOGD("Current is %dmA", current_now);
+        return;
+      }
+      ALOGD("Waiting 1 second...");
+      this_thread::sleep_for(chrono::seconds(1));
     }
-    ALOGD("Waiting 1 second...");
-    this_thread::sleep_for(chrono::seconds(1));
+    ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
   }
-  ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
 }
 
 string get_value_from_db(sqlite3 *db, const string &key) {
@@ -368,6 +375,13 @@ void disable_zcharge(const string &db_file) {
 
 int main(int argc, char *argv[]) {
   const string default_db_file = "/data/adb/zcharge/zcharge.db";
+
+  // Signal handling
+  signal(SIGTERM, [](int signum) {
+    ALOGE("zcharge closed");
+    exit(signum);
+  });
+
   if (argc == 4 && string(argv[1]) == "--convert") {
     string old_config = argv[2];
     string new_config = argv[3];
@@ -381,22 +395,33 @@ int main(int argc, char *argv[]) {
   } else {
     string db_file = default_db_file;
     pid_t pid, sid;
+
     pid = fork();
-    if (pid < 0)
+    if (pid < 0) {
       exit(EXIT_FAILURE);
-    if (pid > 0)
+    }
+    if (pid > 0) {
       exit(EXIT_SUCCESS);
+    }
+
     umask(0);
+
     sid = setsid();
-    if (sid < 0)
+    if (sid < 0) {
       exit(EXIT_FAILURE);
-    if ((chdir("/")) < 0)
+    }
+
+    if ((chdir("/")) < 0) {
       exit(EXIT_FAILURE);
+    }
+
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
+
     thread service_thread(limiter_service, db_file);
     service_thread.join();
   }
+
   return 0;
 }
