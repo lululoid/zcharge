@@ -392,35 +392,34 @@ int main(int argc, char *argv[]) {
 
   // Signal handling
   signal(SIGTERM, [](int signum) {
-    ALOGE("zcharge closed");
+    ALOGE("zcharge terminated");
     exit(signum);
   });
 
-  if (argc == 4 && string(argv[1]) == "--convert") {
+  // Argument validation
+  if (argc > 4) {
+    print_usage();
+    return EXIT_FAILURE;
+  } else if (argc == 4 && string(argv[1]) == "--convert") {
     string old_config = argv[2];
     string new_config = argv[3];
     conf_to_db(new_config, old_config);
-    return 0;
-  } else if (argc == 3 && string(argv[1]) == "--enable") {
-    string db_file = (argc == 3) ? default_db_file : argv[2];
-    enable_zcharge(db_file);
-    return 0;
-  } else if (argc == 3 && string(argv[1]) == "--disable") {
-    string db_file = (argc == 3) ? default_db_file : argv[2];
-    disable_zcharge(db_file);
     return 0;
   } else if (argc == 2 &&
              (string(argv[1]) == "-h" || string(argv[1]) == "--help")) {
     print_usage();
     return 0;
-  } else if (argc > 1) {
-    // Print usage for invalid arguments
-    print_usage();
-    return EXIT_FAILURE;
+  } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--enable") {
+    string db_file = (argc == 3) ? argv[2] : default_db_file;
+    enable_zcharge(db_file);
+    return 0;
+  } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--disable") {
+    string db_file = (argc == 3) ? argv[2] : default_db_file;
+    disable_zcharge(db_file);
+    return 0;
   }
 
-  // Default behavior if no arguments are passed
-  string db_file = default_db_file;
+  // Daemonize the process
   pid_t pid, sid;
 
   pid = fork();
@@ -428,25 +427,27 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
   if (pid > 0) {
-    exit(EXIT_SUCCESS);
+    exit(EXIT_SUCCESS); // Parent exits
   }
 
-  umask(0);
+  umask(0); // Set file mode creation mask to 0
 
-  sid = setsid();
+  sid = setsid(); // Create a new session ID
   if (sid < 0) {
     exit(EXIT_FAILURE);
   }
 
-  if ((chdir("/")) < 0) {
+  if ((chdir("/")) < 0) { // Change working directory
     exit(EXIT_FAILURE);
   }
 
-  // Commented out lines for printing
+  // Close standard file descriptors if needed
   // close(STDIN_FILENO);
   // close(STDOUT_FILENO);
   // close(STDERR_FILENO);
 
+  // Start limiter_service
+  string db_file = (argc == 3) ? argv[2] : default_db_file;
   thread service_thread(limiter_service, db_file);
   service_thread.join();
 
