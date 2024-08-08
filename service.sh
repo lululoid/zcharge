@@ -6,4 +6,4 @@ CONF=$NVBASE/zcharge/zcharge.db
 MOD_BASE=$NVBASE/zcharge
 
 $MODBIN/zcharge
-logcat --pid=$(pidof zcharge) --file=$MOD_BASE/zcharge.log
+logcat -v time zcharge:V *:S --file=$MOD_BASE/zcharge.log

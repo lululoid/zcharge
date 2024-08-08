@@ -3,6 +3,7 @@
 #include <csignal>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -22,6 +23,35 @@ using namespace std;
 string on_switch, off_switch, charging_switch_path, charging_switch_value;
 bool enabled, charging;
 mutex mtx;
+volatile sig_atomic_t reload_config = 0;
+
+bool send_reload_signal(const std::string &zcharge_pid) {
+  std::ifstream file(zcharge_pid);
+  if (!file.is_open()) {
+    ALOGE("Failed to open PID file: %s", zcharge_pid.c_str());
+    return false;
+  }
+
+  pid_t pid;
+  file >> pid;
+  file.close();
+
+  if (pid <= 0) {
+    ALOGE("Invalid PID in file: %s", zcharge_pid.c_str());
+    return false;
+  }
+
+  return kill(pid, SIGHUP) == 0;
+}
+
+void signal_handler(int signum) {
+  if (signum == SIGHUP) {
+    reload_config = 1;
+  } else if (signum == SIGTERM) {
+    ALOGE("zcharge terminated");
+    exit(signum);
+  }
+}
 
 void notif(const char *format, ...) {
   char buffer[256];
@@ -249,59 +279,83 @@ void limiter_service(const string &db_file) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
-  ALOGD("Processing configuration");
-  int recharging_limit = 0, capacity_limit = 0, temp_limit = 0;
+  // Initial configuration load
+  int recharging_limit = 75, capacity_limit = 85, temp_limit = 410;
   bool charging = false;
   string sql = "SELECT key, value FROM zcharge_config";
   sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-      string key = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
-      string value =
-          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-      if (key == "recharging_limit")
-        recharging_limit = stoi(value);
-      else if (key == "capacity_limit")
-        capacity_limit = stoi(value);
-      else if (key == "temperature_limit")
-        temp_limit = stoi(value);
-      else if (key == "charging_switch_path")
-        charging_switch_path = value;
-      else if (key == "charging_switch_on")
-        on_switch = value;
-      else if (key == "charging_switch_off")
-        off_switch = value;
-      else if (key == "enabled")
-        enabled = (value == "1");
+
+  auto load_config = [&]() {
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+      while (sqlite3_step(stmt) == SQLITE_ROW) {
+        string key =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+        string value =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+        if (key == "recharging_limit")
+          recharging_limit = stoi(value);
+        else if (key == "capacity_limit")
+          capacity_limit = stoi(value);
+        else if (key == "temperature_limit")
+          temp_limit = stoi(value);
+        else if (key == "charging_switch_path")
+          charging_switch_path = value;
+        else if (key == "charging_switch_on")
+          on_switch = value;
+        else if (key == "charging_switch_off")
+          off_switch = value;
+        else if (key == "enabled")
+          enabled = (value == "1");
+      }
+      ALOGD("Configuration loaded");
+      ALOGD("enabled: %d", enabled);
+      ALOGD("recharging_limit: %d%%", recharging_limit);
+      ALOGD("capacity_limit: %d%%", capacity_limit);
+      ALOGD("temperature_limit: %.1f°C", temp_limit / 10.0);
+      ALOGD("on_switch: %s", on_switch.c_str());
+      ALOGD("off_switch: %s", off_switch.c_str());
+      ALOGD("charging_switch_path: %s", charging_switch_path.c_str());
+      ALOGD("Entering main loop");
+      ALOGD("Current: %dmA", read_current_now());
+
+    } else {
+      ALOGE("Failed to execute query: %s", sqlite3_errmsg(db));
     }
-    ALOGD("Configuration loaded");
-  } else {
-    ALOGE("Failed to execute query: %s", sqlite3_errmsg(db));
-  }
-  sqlite3_finalize(stmt);
+    sqlite3_finalize(stmt);
+  };
+
+  load_config();
   sqlite3_close(db);
-  ALOGD("enabled: %d", enabled);
-  ALOGD("recharging_limit: %d%%", recharging_limit);
-  ALOGD("capacity_limit: %d%%", capacity_limit);
-  ALOGD("temperature_limit: %.1f°C", temp_limit / 10.0);
-  ALOGD("on_switch: %s", on_switch.c_str());
-  ALOGD("off_switch: %s", off_switch.c_str());
-  ALOGD("charging_switch_path: %s", charging_switch_path.c_str());
-  ALOGD("Entering main loop");
-  ALOGD("Current: %dmA", read_current_now());
-  while (enabled) {
+
+  while (true) {
+    if (reload_config) {
+      ALOGD("Reloading configuration...");
+      reload_config = 0;
+      sqlite3_open(db_file.c_str(), &db);
+      load_config();
+      sqlite3_close(db);
+      continue; // Restart the loop with new config
+    }
+
+    if (!enabled) {
+      this_thread::sleep_for(chrono::seconds(1));
+      continue;
+    }
+
     int capacity = read_capacity();
     if (capacity == -1) {
       ALOGD("Failed to read capacity");
       this_thread::sleep_for(chrono::seconds(1));
       continue;
     }
+
     string charging_state = read_charging_state();
     if (charging_state.empty()) {
       ALOGD("Failed to read charging state");
       this_thread::sleep_for(chrono::seconds(1));
       continue;
     }
+
     if (charging_state == "Charging") {
       charging_switch_value =
           get_value_from_charging_switch(charging_switch_path);
@@ -325,6 +379,7 @@ void limiter_service(const string &db_file) {
         switch_on();
       }
     }
+
     if (charging_state == "Discharging") {
       if (charging) {
         ALOGD("Charger unplugged");
@@ -387,41 +442,53 @@ void print_usage() {
        << endl;
 }
 
+void save_pid(const std::string &zcharge_pid) {
+  std::ofstream file(zcharge_pid);
+  if (file.is_open()) {
+    file << getpid(); // Save the PID of the current process
+    file.close();
+  } else {
+    ALOGE("Failed to open PID file for writing: %s", zcharge_pid.c_str());
+  }
+}
+
 int main(int argc, char *argv[]) {
-  const string default_db_file = "/data/adb/zcharge/zcharge.db";
+  const std::string default_db_file = "/data/adb/zcharge/zcharge.db";
+  const std::string zcharge_pid =
+      "/data/adb/zcharge/zcharge.pid"; // Path to the PID file
 
   // Signal handling
-  signal(SIGTERM, [](int signum) {
-    ALOGE("zcharge terminated");
-    exit(signum);
-  });
+  signal(SIGHUP, signal_handler);
+  signal(SIGTERM, signal_handler);
 
   // Argument validation
   if (argc > 4) {
     print_usage();
     return EXIT_FAILURE;
-  } else if (argc == 4 && string(argv[1]) == "--convert") {
-    string old_config = argv[2];
-    string new_config = argv[3];
+  } else if (argc == 4 && std::string(argv[1]) == "--convert") {
+    std::string old_config = argv[2];
+    std::string new_config = argv[3];
     conf_to_db(new_config, old_config);
     return 0;
-  } else if (argc == 2 &&
-             (string(argv[1]) == "-h" || string(argv[1]) == "--help")) {
+  } else if (argc == 2 && (std::string(argv[1]) == "-h" ||
+                           std::string(argv[1]) == "--help")) {
     print_usage();
     return 0;
-  } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--enable") {
-    string db_file = (argc == 3) ? argv[2] : default_db_file;
+  } else if (argc == 2 && std::string(argv[1]) == "--reload") {
+    send_reload_signal(zcharge_pid);
+    return 0;
+  } else if ((argc == 3 || argc == 2) && std::string(argv[1]) == "--enable") {
+    std::string db_file = (argc == 3) ? argv[2] : default_db_file;
     enable_zcharge(db_file);
     return 0;
-  } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--disable") {
-    string db_file = (argc == 3) ? argv[2] : default_db_file;
+  } else if ((argc == 3 || argc == 2) && std::string(argv[1]) == "--disable") {
+    std::string db_file = (argc == 3) ? argv[2] : default_db_file;
     disable_zcharge(db_file);
     return 0;
   }
 
   // Daemonize the process
   pid_t pid, sid;
-
   pid = fork();
   if (pid < 0) {
     exit(EXIT_FAILURE);
@@ -437,18 +504,16 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
 
-  if ((chdir("/")) < 0) { // Change working directory
+  if (chdir("/") < 0) { // Change working directory
     exit(EXIT_FAILURE);
   }
 
-  // Close standard file descriptors if needed
-  // close(STDIN_FILENO);
-  // close(STDOUT_FILENO);
-  // close(STDERR_FILENO);
+  // Save the PID to a file
+  save_pid(zcharge_pid);
 
   // Start limiter_service
-  string db_file = (argc == 3) ? argv[2] : default_db_file;
-  thread service_thread(limiter_service, db_file);
+  std::string db_file = (argc == 2) ? argv[1] : default_db_file;
+  std::thread service_thread(limiter_service, db_file);
   service_thread.join();
 
   return 0;
