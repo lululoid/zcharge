@@ -22,8 +22,9 @@ using namespace std;
 #define ALOGI(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 string on_switch, off_switch, switch_, charging_switch_path,
-    charging_switch_value;
-bool enabled, charging;
+    charging_switch_value, charging_state;
+int current_now;
+bool enabled;
 mutex mtx;
 volatile sig_atomic_t reload_config = 0;
 
@@ -234,9 +235,15 @@ string check_sign(int num) {
   }
 }
 
+bool is_charging() {
+  current_now = read_current_now();
+  string sign = check_sign(current_now);
+  return (charging_state == "Charging" && charging_switch_value == on_switch &&
+          sign == "-");
+}
+
 void battery_switch(string switch_) {
   lock_guard<mutex> lock(mtx);
-  int current_now;
   int wait_time = 20;
   if (charging_switch_value != off_switch) {
     ofstream file(charging_switch_path);
@@ -257,8 +264,7 @@ void battery_switch(string switch_) {
       ALOGD("Switching off charging");
       for (int i = 0; i < wait_time; ++i) {
         current_now = read_current_now();
-        if (check_sign(current_now) == "0") {
-          charging = false;
+        if (!is_charging()) {
           ALOGD("Current is %dmA", current_now);
           return;
         }
@@ -268,9 +274,7 @@ void battery_switch(string switch_) {
     } else if (switch_ == on_switch) {
       ALOGD("Switching on charging");
       for (int i = 0; i < wait_time; ++i) {
-        current_now = read_current_now();
-        if (check_sign(current_now) == "-") {
-          charging = true;
+        if (is_charging()) {
           ALOGD("Current is %dmA", current_now);
           return;
         }
@@ -328,7 +332,7 @@ void limiter_service(const string &db_file) {
 
   // Initial configuration load
   int recharging_limit = 75, capacity_limit = 85, temp_limit = 410;
-  bool charging = false, plugged = false;
+  bool plugged = false;
   string sql = "SELECT key, value FROM zcharge_config";
   sqlite3_stmt *stmt;
 
@@ -395,7 +399,7 @@ void limiter_service(const string &db_file) {
       continue;
     }
 
-    string charging_state = read_charging_state();
+    charging_state = read_charging_state();
     if (charging_state.empty()) {
       ALOGE("Failed to read charging state");
       this_thread::sleep_for(chrono::seconds(1));
@@ -430,7 +434,7 @@ void limiter_service(const string &db_file) {
       }
 
       // Cooldown before charging to capacity_limit again
-      if (capacity <= recharging_limit) {
+      if (capacity <= recharging_limit && (!is_charging())) {
         ALOGI("Battery level is dropped to recharging limit (%d%%)",
               capacity_limit);
         battery_switch(on_switch);
