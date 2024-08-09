@@ -368,7 +368,7 @@ void limiter_service(const string &db_file) {
         else if (key == "charging_switch_off")
           off_switch = value;
         else if (key == "enabled")
-          enabled = (value == "1");
+          enabled = (stoi(value) == 1);
       }
       ALOGD("Configuration loaded");
       ALOGD("enabled: %d", enabled);
@@ -390,7 +390,7 @@ void limiter_service(const string &db_file) {
   load_config();
   sqlite3_close(db);
 
-  while (true) {
+  while (enabled) {
     if (reload_config) {
       ALOGD("Reloading configuration...");
       reload_config = 0;
@@ -401,11 +401,6 @@ void limiter_service(const string &db_file) {
       load_config();
       sqlite3_close(db);
       continue; // Restart the loop with new config
-    }
-
-    if (!enabled) {
-      this_thread::sleep_for(chrono::seconds(1));
-      continue;
     }
 
     int capacity = read_capacity();
