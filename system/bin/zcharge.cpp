@@ -19,8 +19,10 @@ using namespace std;
 #define LOG_TAG "zcharge"
 #define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define ALOGI(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-string on_switch, off_switch, charging_switch_path, charging_switch_value;
+string on_switch, off_switch, switch_, charging_switch_path,
+    charging_switch_value;
 bool enabled, charging;
 mutex mtx;
 volatile sig_atomic_t reload_config = 0;
@@ -232,7 +234,7 @@ string check_sign(int num) {
   }
 }
 
-void switch_off() {
+void battery_switch(string switch_) {
   lock_guard<mutex> lock(mtx);
   int current_now;
   int wait_time = 20;
@@ -243,56 +245,38 @@ void switch_off() {
       ALOGE("Failed to open charging switch: %s", on_switch.c_str());
       return;
     }
-    file << off_switch;
+    file << switch_;
   }
 
   // Somebody explain why above code is not executed
   // when I ise one if
-  if (charging_switch_value != off_switch) {
+  if (charging_switch_value != switch_) {
     ALOGD("Charging switch value: %s", charging_switch_value.c_str());
-    ALOGD("Switching off charging");
-    for (int i = 0; i < wait_time; ++i) {
-      current_now = read_current_now();
-      if (check_sign(current_now) == "0") {
-        charging = false;
-        ALOGD("Current is %dmA", current_now);
-        return;
+
+    if (switch_ == off_switch) {
+      ALOGD("Switching off charging");
+      for (int i = 0; i < wait_time; ++i) {
+        current_now = read_current_now();
+        if (check_sign(current_now) == "0") {
+          charging = false;
+          ALOGD("Current is %dmA", current_now);
+          return;
+        }
+        ALOGD("Waiting %d second...", i + 1);
+        this_thread::sleep_for(chrono::seconds(1));
       }
-      ALOGD("Waiting %d second...", i++);
-      this_thread::sleep_for(chrono::seconds(1));
-    }
-
-    ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
-  }
-}
-
-void switch_on() {
-  lock_guard<mutex> lock(mtx);
-  int current_now;
-  int wait_time = 20;
-  if (charging_switch_value != on_switch) {
-    ofstream file(charging_switch_path);
-
-    if (!file.is_open()) {
-      ALOGE("Failed to open charging switch: %s", on_switch.c_str());
-      return;
-    }
-    file << on_switch;
-  }
-
-  if (charging_switch_value != on_switch) {
-    ALOGD("Charging switch value: %s", charging_switch_value.c_str());
-    ALOGD("Switching on charging");
-
-    for (int i = 0; i < wait_time; ++i) {
-      current_now = read_current_now();
-      if (check_sign(current_now) == "-") {
-        charging = true;
-        ALOGD("Current is %dmA", current_now);
-        return;
+    } else if (switch_ == on_switch) {
+      ALOGD("Switching on charging");
+      for (int i = 0; i < wait_time; ++i) {
+        current_now = read_current_now();
+        if (check_sign(current_now) == "-") {
+          charging = true;
+          ALOGD("Current is %dmA", current_now);
+          return;
+        }
+        ALOGD("Waiting %d second...", i + 1);
+        this_thread::sleep_for(chrono::seconds(1));
       }
-      ALOGD("Waiting %d second...", i++);
-      this_thread::sleep_for(chrono::seconds(1));
     }
     ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
   }
@@ -344,7 +328,7 @@ void limiter_service(const string &db_file) {
 
   // Initial configuration load
   int recharging_limit = 75, capacity_limit = 85, temp_limit = 410;
-  bool charging = false;
+  bool charging = false, plugged = false;
   string sql = "SELECT key, value FROM zcharge_config";
   sqlite3_stmt *stmt;
 
@@ -398,6 +382,7 @@ void limiter_service(const string &db_file) {
         ALOGE("Can't reopen database: %s", sqlite3_errmsg(db));
         continue; // Skip this iteration if reopening fails
       }
+
       load_config();
       sqlite3_close(db);
       continue; // Restart the loop with new config
@@ -420,41 +405,50 @@ void limiter_service(const string &db_file) {
     if (charging_state == "Charging") {
       charging_switch_value =
           get_value_from_charging_switch(charging_switch_path);
-      if (!charging) {
-        ALOGD("Charger plugged");
-        charging = true;
+
+      if (!plugged) {
+        ALOGI("Charger plugged");
+        plugged = true;
       }
+
       if (capacity >= capacity_limit) {
-        switch_off();
+        ALOGI("Capacity limit reached (%d%%)", capacity_limit);
+        battery_switch(off_switch);
       }
+
+      // Temperature controller
       if (read_bat_temp() >= temp_limit) {
-        switch_off();
+        ALOGI("Temperature limit reached (%.1f°C)", temp_limit / 10.0);
+        battery_switch(off_switch);
+
+        // Wait until cooled off
         while (read_bat_temp() > temp_limit - 10) {
           this_thread::sleep_for(chrono::seconds(1));
         }
-        if (capacity < capacity_limit) {
-          switch_on();
-        }
+        // Restore last charging_switch_value
+        battery_switch(charging_switch_value);
       }
+
+      // Cooldown before charging to capacity_limit again
       if (capacity <= recharging_limit) {
-        switch_on();
+        ALOGI("Battery level is dropped to recharging limit (%d%%)",
+              capacity_limit);
+        battery_switch(on_switch);
       }
     }
 
     if (charging_state == "Discharging") {
-      if (charging) {
+      if (plugged) {
         ALOGD("Charger unplugged");
-        charging = false;
+        plugged = false;
       }
+
+      // Avoid discharging below 30%
       if (capacity == 30) {
         notif("Battery is %d%%, charge your phone to increase battery lifespan",
               capacity);
       }
-      while (read_charging_state() != "Charging") {
-        this_thread::sleep_for(chrono::seconds(1));
-      }
     }
-
     this_thread::sleep_for(chrono::seconds(1));
   }
 }
@@ -479,6 +473,7 @@ void enable_zcharge(const string &db_file) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
+
   update_config(db, "enabled", "1");
   sqlite3_close(db);
   ALOGD("zcharge enabled");
@@ -490,6 +485,7 @@ void disable_zcharge(const string &db_file) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
+
   update_config(db, "enabled", "0");
   sqlite3_close(db);
   ALOGD("zcharge disabled");

@@ -21,12 +21,13 @@ set_perm_recursive $MODPATH/system/bin/zcharge 0 2000 0755 0755
 
 alias zcharge="$MODBIN/zcharge"
 
-cp $MODPATH/zcharge.db $CONF &&
+[ ! -f $MODPATH/zcharge.db ] &&
+	cp $MODPATH/zcharge.db $CONF &&
 	loger I "⟩ Configuration is copied to $CONF"
 
-loger I "
-⟩ Terminating zcharge if available"
-killall $TAG
+killall $TAG &&
+	loger I "
+⟩ zcharge terminated"
 
 zcharge &&
 	loger I "
