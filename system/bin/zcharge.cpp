@@ -33,7 +33,11 @@ bool send_reload_signal(const std::string &zcharge_pid) {
   }
 
   pid_t pid;
-  file >> pid;
+  if (!(file >> pid)) {
+    ALOGE("Failed to read PID from file: %s", zcharge_pid.c_str());
+    file.close();
+    return false;
+  }
   file.close();
 
   if (pid <= 0) {
@@ -41,7 +45,12 @@ bool send_reload_signal(const std::string &zcharge_pid) {
     return false;
   }
 
-  return kill(pid, SIGHUP) == 0;
+  if (kill(pid, SIGHUP) != 0) {
+    ALOGE("Failed to send SIGHUP to process with PID: %d", pid);
+    return false;
+  }
+
+  return true;
 }
 
 void signal_handler(int signum) {
@@ -50,6 +59,8 @@ void signal_handler(int signum) {
   } else if (signum == SIGTERM) {
     ALOGE("zcharge terminated");
     exit(signum);
+  } else {
+    ALOGE("Received invalid signal: %d", signum);
   }
 }
 
@@ -59,13 +70,18 @@ void notif(const char *format, ...) {
   va_start(args, format);
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
-  system(("su -lp 2000 -c \"cmd notification post -S bigtext -t 'zcharge' "
-          "'Tag' '" +
-          string(buffer) + "'\"")
-             .c_str());
+
+  string command =
+      "su -lp 2000 -c \"cmd notification post -S bigtext -t 'zcharge' 'Tag' '" +
+      std::string(buffer) + "'\"";
+  int result = system(command.c_str());
+  if (result != 0) {
+    ALOGE("system command failed: %d", result);
+  }
+  ALOGD("Notification sent: succes(%d)", result);
 }
 
-void execute_sql(sqlite3 *db, const string &sql) {
+void execute_sql(sqlite3 *db, const std::string &sql) {
   char *errmsg = nullptr;
   if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &errmsg) != SQLITE_OK) {
     ALOGE("SQL error: %s", errmsg);
@@ -75,20 +91,30 @@ void execute_sql(sqlite3 *db, const string &sql) {
 
 void parse_and_insert_config(sqlite3 *db, const string &config_file) {
   ifstream infile(config_file);
+  if (!infile.is_open()) {
+    ALOGE("Failed to open configuration file: %s", config_file.c_str());
+    return;
+  }
+
   string line, sql = "INSERT INTO zcharge_config (key, value) VALUES ";
   while (getline(infile, line)) {
     if (line.empty() || line[0] == '#')
       continue;
+
     size_t pos = line.find('=');
     if (pos != string::npos) {
       string key = line.substr(0, pos);
       string value = line.substr(pos + 1);
       key.erase(key.find_last_not_of(" \t\n\r\f\v") + 1);
       key.erase(0, key.find_first_not_of(" \t\n\r\f\v"));
+
       if (key == "charging_switch") {
         istringstream iss(value);
         string temp;
-        iss >> temp >> on_switch >> off_switch;
+        if (!(iss >> temp >> on_switch >> off_switch)) {
+          ALOGE("Failed to parse charging_switch value: %s", value.c_str());
+          continue; // Skip this line if parsing fails
+        }
         sql += "('charging_switch_path', '" + temp + "'),";
         sql += "('charging_switch_on', '" + on_switch + "'),";
         sql += "('charging_switch_off', '" + off_switch + "'),";
@@ -96,10 +122,18 @@ void parse_and_insert_config(sqlite3 *db, const string &config_file) {
       } else {
         sql += "('" + key + "', '" + value + "'),";
       }
+    } else {
+      ALOGE("Invalid configuration line format: %s", line.c_str());
     }
   }
-  sql.back() = ';';
-  execute_sql(db, sql);
+
+  // Remove trailing comma and append semicolon
+  if (sql.length() > 30) { // Ensure there is something to finalize
+    sql.back() = ';';
+    execute_sql(db, sql);
+  } else {
+    ALOGE("No valid SQL statement to execute after parsing configuration file");
+  }
 }
 
 void conf_to_db(const string &db_file, const string &config_file) {
@@ -109,15 +143,35 @@ void conf_to_db(const string &db_file, const string &config_file) {
     return;
   }
   ALOGD("Opened database successfully");
-  execute_sql(db, R"(
+
+  const char *create_table_sql = R"(
         CREATE TABLE IF NOT EXISTS zcharge_config (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             key TEXT NOT NULL,
             value TEXT NOT NULL
         );
-    )");
+    )";
+
+  char *errmsg = nullptr;
+  if (sqlite3_exec(db, create_table_sql, nullptr, nullptr, &errmsg) !=
+      SQLITE_OK) {
+    ALOGE("Failed to create table: %s", errmsg);
+    sqlite3_free(errmsg);
+    sqlite3_close(db);
+    return;
+  }
+
+  ALOGD("Table created or verified successfully");
+
+  // Parsing configuration and inserting into the database
   parse_and_insert_config(db, config_file);
-  sqlite3_close(db);
+
+  if (sqlite3_close(db) != SQLITE_OK) {
+    ALOGE("Failed to close database: %s", sqlite3_errmsg(db));
+  } else {
+    ALOGD("Database closed successfully");
+  }
+
   ALOGD("Configuration inserted into the database successfully");
 }
 
@@ -155,9 +209,10 @@ string read_charging_state() {
 }
 
 int read_current_now() {
-  ifstream file("/sys/class/power_supply/battery/current_now");
+  string file_path = "/sys/class/power_supply/battery/current_now";
+  ifstream file(file_path);
   if (!file.is_open()) {
-    ALOGE("Failed to open status file");
+    ALOGE("Failed to open %s file", file_path.c_str());
     return -1;
   }
   int current_now;
@@ -170,8 +225,10 @@ string check_sign(int num) {
     return "+";
   } else if (num < 0) {
     return "-";
-  } else {
+  } else if (num == 0) {
     return "0";
+  } else {
+    return "";
   }
 }
 
@@ -183,7 +240,7 @@ void switch_off() {
     ofstream file(charging_switch_path);
 
     if (!file.is_open()) {
-      ALOGE("Failed to open charging switch path file");
+      ALOGE("Failed to open charging switch: %s", on_switch.c_str());
       return;
     }
     file << off_switch;
@@ -201,7 +258,7 @@ void switch_off() {
         ALOGD("Current is %dmA", current_now);
         return;
       }
-      ALOGD("Waiting %d second...", i);
+      ALOGD("Waiting %d second...", i++);
       this_thread::sleep_for(chrono::seconds(1));
     }
 
@@ -217,7 +274,7 @@ void switch_on() {
     ofstream file(charging_switch_path);
 
     if (!file.is_open()) {
-      ALOGE("Failed to open charging switch path file");
+      ALOGE("Failed to open charging switch: %s", on_switch.c_str());
       return;
     }
     file << on_switch;
@@ -234,7 +291,7 @@ void switch_on() {
         ALOGD("Current is %dmA", current_now);
         return;
       }
-      ALOGD("Waiting %d second...", i);
+      ALOGD("Waiting %d second...", i++);
       this_thread::sleep_for(chrono::seconds(1));
     }
     ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
@@ -258,6 +315,11 @@ string get_value_from_db(sqlite3 *db, const string &key) {
 
 string get_charging_switch_path(sqlite3 *db) {
   charging_switch_path = get_value_from_db(db, "charging_switch_path");
+
+  if (charging_switch_path.empty()) {
+    ALOGE("Failed to retrieve 'charging_switch_path' from the database");
+  }
+
   return charging_switch_path;
 }
 
@@ -279,6 +341,7 @@ void limiter_service(const string &db_file) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
+
   // Initial configuration load
   int recharging_limit = 75, capacity_limit = 85, temp_limit = 410;
   bool charging = false;
@@ -331,7 +394,10 @@ void limiter_service(const string &db_file) {
     if (reload_config) {
       ALOGD("Reloading configuration...");
       reload_config = 0;
-      sqlite3_open(db_file.c_str(), &db);
+      if (sqlite3_open(db_file.c_str(), &db)) {
+        ALOGE("Can't reopen database: %s", sqlite3_errmsg(db));
+        continue; // Skip this iteration if reopening fails
+      }
       load_config();
       sqlite3_close(db);
       continue; // Restart the loop with new config
@@ -344,14 +410,14 @@ void limiter_service(const string &db_file) {
 
     int capacity = read_capacity();
     if (capacity == -1) {
-      ALOGD("Failed to read capacity");
+      ALOGE("Failed to read capacity");
       this_thread::sleep_for(chrono::seconds(1));
       continue;
     }
 
     string charging_state = read_charging_state();
     if (charging_state.empty()) {
-      ALOGD("Failed to read charging state");
+      ALOGE("Failed to read charging state");
       this_thread::sleep_for(chrono::seconds(1));
       continue;
     }
@@ -393,6 +459,7 @@ void limiter_service(const string &db_file) {
         this_thread::sleep_for(chrono::seconds(1));
       }
     }
+
     this_thread::sleep_for(chrono::seconds(1));
   }
 }
@@ -400,7 +467,15 @@ void limiter_service(const string &db_file) {
 void update_config(sqlite3 *db, const string &key, const string &value) {
   string sql = "UPDATE zcharge_config SET value = '" + value +
                "' WHERE key = '" + key + "';";
-  execute_sql(db, sql);
+
+  try {
+    execute_sql(db, sql);
+    ALOGD("Config updated for key: %s with value: %s", key.c_str(),
+          value.c_str());
+  } catch (const std::exception &e) {
+    ALOGE("Failed to update config for key: %s with value: %s. Error: %s",
+          key.c_str(), value.c_str(), e.what());
+  }
 }
 
 void enable_zcharge(const string &db_file) {
@@ -428,16 +503,21 @@ void disable_zcharge(const string &db_file) {
 void print_usage() {
   cout << "Usage: zcharge [OPTIONS] [ARGS...]" << endl;
   cout << "Options:" << endl;
-  cout << "  --convert <old_config> <new_config>   Convert the old "
+  cout << "  --convert <old_config> <new_config>      Convert the old "
           "configuration file to the new database format."
        << endl;
-  cout << "  --enable [db_file]                     Enable zcharge with the "
+  cout << "  --enable [config_db]                     Enable zcharge with the "
           "specified database file (or default)."
        << endl;
-  cout << "  --disable [db_file]                    Disable zcharge with the "
+  cout << "  --disable [config_db]                    Disable zcharge with the "
           "specified database file (or default)."
        << endl;
-  cout << "  -h, --help                             Show this help message and "
+  cout << "  --reload                                 Tell service to reload "
+          "the "
+          "config."
+       << endl;
+  cout << "  -h, --help                               Show this help message "
+          "and "
           "exit."
        << endl;
 }

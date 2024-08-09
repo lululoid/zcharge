@@ -1,80 +1,42 @@
-# shellcheck disable=SC3043,SC2046,SC2086,SC3010,SC2034
+#!/system/bin/sh
+# shellcheck disable=SC3043,SC2034,SC2086,SC3060,SC3010
 SKIPUNZIP=1
-TEMPDIR=/data/local/tmp/zcharge
-export MODPATH
-export MODBIN=$MODPATH/system/bin
-
-mkdir $TEMPDIR
-# exec 3>&1 2>&1
-# set -x # Prints commands, prefixing them with a character stored in an environmental variable ($PS4)
 unzip -o "$ZIPFILE" -x 'META-INF/*' -d $MODPATH >&2
+
+. $MODPATH/tools.sh
+mkdir -p $LOG_DIR
+
+# save full logging
+exec 3>&1 1>>$LOG 2>&1
+# restore stdout for magisk
+exec 1>&3
+set -x
+echo "
+⟩ $(date -Is)" >>$LOG
+
 set_perm_recursive $MODPATH 0 0 0755 0644
 set_perm_recursive $MODBIN 0 2000 0755 0755
-set_perm_recursive $MODPATH/modules 0 2000 0755 0755
-set_perm_recursive "$MODPATH/system/bin/zcharge" 0 2000 0755 0755
-set_perm_recursive "$MODBIN/zcharge_service.sh" 0 2000 0755 0755
+set_perm_recursive $MODPATH/tools.sh 0 2000 0755 0755
+set_perm_recursive $MODPATH/system/bin/zcharge 0 2000 0755 0755
 
-loger() {
-	log=$(echo "$*" | tr -s " ")
-	true && ui_print "  DEBUG: $log"
-}
+alias zcharge="$MODBIN/zcharge"
 
-compare_num() {
-	local version=$1
-	local operator=$2
-	local version0=$3
+cp $MODPATH/zcharge.db $CONF &&
+	loger I "⟩ Configuration is copied to $CONF"
 
-	awk -v version="${version}" -v version_prev="${version0}" -v op="${operator}" '
-    BEGIN {
-        if (op == ">") {
-            exit version > version_prev ? 0 : 1
-        } else if (op == "<") {
-            exit version < version_prev ? 0 : 1
-        } else {
-            exit 1
-        }
-    }'
-}
+loger I "
+⟩ Terminating zcharge if available"
+killall $TAG
 
-MOD_BASE=$NVBASE/zcharge
+zcharge &&
+	loger I "
+⟩ zcharge started
+"
+zcharge -h
 
-mkdir -p $MOD_BASE
-
-CONF_NEW=$MODPATH/zcharge.conf
-[ ! -f /data/adb/zcharge/zcharge.conf ] &&
-	cp $CONF_NEW $MOD_BASE
-
-CONF=$MOD_BASE/zcharge.conf
-prev_v=$(sed -n 's/version=//p' $CONF)
-current_v=$(sed -n 's/version=//p' $CONF_NEW)
-
-if [ -n "$prev_v" ]; then
-	compare_num "$current_v" ">" "$prev_v" && {
-		cp $MODPATH/zcharge.conf $MOD_BASE/zcharge.conf.old
-		cp $MODPATH/zcharge.conf $MOD_BASE
-		ui_print "
-> Config updated. Old config is 
-$MOD_BASE/zcharge.conf.old"
-	}
-elif [[ -z $prev_v ]]; then
-	cp $MODPATH/zcharge.conf $MOD_BASE
-fi
-
-# $MODBIN/zcharge -ds
-# $MODBIN/zcharge -es
-if [ -f $CONF ] && [ ! -f $MOD_BASE/zcharge.db ]; then
-	$MODBIN/zcharge --convert $CONF $MOD_BASE/zcharge.db
-elif [ ! -f $CONF ]; then
-	$MODBIN/zcharge --convert $CONF_NEW $MOD_BASE/zcharge.db
-fi
-
-CONF_NEW=$MOD_BASE/zcharge.db
-
-kill $(pidof zcharge)
-$MODBIN/zcharge --enable $CONF_NEW
-$MODBIN/zcharge
-$MODBIN/zcharge -h
-logcat -v time zcharge:V *:S --file=$MOD_BASE/zcharge.log
-cat $MOD_BASE/zcharge.log
-cp $MODBIN/zcharge $NVBASE/modules/zcharge/system/bin
+loger I "
+⟩ Starting logcat for zcharge in $LOG
+"
+start_zcharge_logcat
+cp zcharge $NVBASE/modules/zcharge/system/bin
 cp $MODPATH/modules/arsenal.sh $NVBASE/modules/zcharge/modules

@@ -1,9 +1,12 @@
 # shellcheck disable=SC2034,SC2086
 MODDIR=${0%/*}
-export MODDIR
-NVBASE=/data/adb
-CONF=$NVBASE/zcharge/zcharge.db
-MOD_BASE=$NVBASE/zcharge
 
-$MODBIN/zcharge
-logcat -v time zcharge:V *:S --file=$MOD_BASE/zcharge.log
+. $MODPATH/tools.sh
+
+exec 3>&1 1>>"$LOG" 2>&1
+set -x # Prints commands, prefixing them with a character stored in an environmental variable ($PS4)
+echo "
+⟩ $(date -Is)" >>$LOG
+
+zcharge
+start_zcharge_logcat

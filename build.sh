@@ -47,11 +47,9 @@ module_name=$(sed -n 's/^id=\(.*\)/\1/p' module.prop)
 package_name="packages/$module_name-v${version}_$versionCode-beta.zip"
 7za a "$package_name" \
 	META-INF \
-	README.md \
-	build.sh \
 	customize.sh \
 	module.prop \
-	modules \
 	service.sh \
 	system/bin/zcharge \
-	zcharge.conf
+	zcharge.db \
+	tools.sh
