@@ -416,7 +416,9 @@ void limiter_service(const string &db_file) {
       }
 
       if (capacity >= capacity_limit) {
-        ALOGI("Capacity limit reached (%d%%)", capacity_limit);
+        if (is_charging()) {
+          ALOGI("Capacity limit reached (%d%%)", capacity_limit);
+        }
         battery_switch(off_switch);
       }
 
