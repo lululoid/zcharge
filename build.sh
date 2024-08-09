@@ -52,4 +52,5 @@ package_name="packages/$module_name-v${version}_$versionCode-beta.zip"
 	service.sh \
 	system/bin/zcharge \
 	zcharge.db \
-	tools.sh
+	tools.sh \
+	system/lib*
