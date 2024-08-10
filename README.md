@@ -1,14 +1,22 @@
 # zcharge
-Simple module to limit charging capacity.
+Simple module to limit charging capacity. This is my experiment coding in C++, jump straight using chatgpt, pretty fun.
 
-# config
+# Usage
 ```
-# zcharge configuration
-enabled = 1 # to determine whether the service is active or inactive
-wait = 0 # determine if the service is waiting battery to reached recharging limit
-capacity_limit = 80
-recharging_limit = 70 # determine when to start recharging again
-charging_reminder = 30
-# charging switch could be different depending on your device
-charging_switch = /sys/devices/platform/soc/4a88000.i2c/i2c-1/1-0055/power_supply/battery/battery_charging_enabled 1 0
+Usage: zcharge [OPTIONS] [ARGS...]
+Options:
+  --convert <old_config> <new_config>      Convert the old configuration file to the new database format.
+  --enable [config_db]                     Enable zcharge with the specified database file (or default).
+  --disable [config_db]                    Disable zcharge with the specified database file (or default).
+  --reload                                 Tell service to reload the config.
+  --update <key=value> [config_db]         Update the configuration value for the specified key. If [config_db] is omitted, uses default.
+  -h, --help                               Show this help message and exit.
+
+Example key-value pairs:
+  charging_switch_path=/path/to/switch
+  charging_switch_on=1
+  charging_switch_off=0
+  recharging_limit=75
+  capacity_limit=85
+  temperature_limit=410
 ```
