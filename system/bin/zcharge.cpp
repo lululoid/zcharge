@@ -7,7 +7,6 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
-#include <mutex>
 #include <sqlite3.h>
 #include <sstream>
 #include <string>
@@ -26,11 +25,10 @@ string on_switch, off_switch, switch_, charging_switch_path,
     charging_switch_value, charging_state;
 int current_now;
 bool enabled;
-mutex mtx;
 volatile sig_atomic_t reload_config = 0;
 
-bool send_reload_signal(const std::string &zcharge_pid) {
-  std::ifstream file(zcharge_pid);
+bool send_reload_signal(const string &zcharge_pid) {
+  ifstream file(zcharge_pid);
   if (!file.is_open()) {
     ALOGE("Failed to open PID file: %s", zcharge_pid.c_str());
     return false;
@@ -77,7 +75,7 @@ void notif(const char *format, ...) {
 
   string command =
       "su -lp 2000 -c \"cmd notification post -S bigtext -t 'zcharge' 'Tag' '" +
-      std::string(buffer) + "'\"";
+      string(buffer) + "'\"";
   int result = system(command.c_str());
   if (result != 0) {
     ALOGE("system command failed: %d", result);
@@ -85,7 +83,7 @@ void notif(const char *format, ...) {
   ALOGD("Notification sent: succes(%d)", result);
 }
 
-void execute_sql(sqlite3 *db, const std::string &sql) {
+void execute_sql(sqlite3 *db, const string &sql) {
   char *errmsg = nullptr;
   if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &errmsg) != SQLITE_OK) {
     ALOGE("SQL error: %s", errmsg);
@@ -243,48 +241,39 @@ bool is_charging() {
           sign == "-");
 }
 
-void battery_switch(string switch_) {
-  lock_guard<mutex> lock(mtx);
-  int wait_time = 20;
-  if (charging_switch_value != off_switch) {
-    ofstream file(charging_switch_path);
+void write_charging_switch(const string &value) {
+  ofstream file(charging_switch_path);
+  if (!file.is_open()) {
+    ALOGE("Failed to open charging switch: %s", charging_switch_path.c_str());
+    return;
+  }
+  file << value;
+  ALOGD("Written %s › %s", value.c_str(), charging_switch_path.c_str());
+}
 
-    if (!file.is_open()) {
-      ALOGE("Failed to open charging switch: %s", on_switch.c_str());
+void set_charging_switch(const string &switch_) {
+  constexpr int wait_time = 20;
+
+  // Write the new value to the charging switch file only if necessary
+  if (charging_switch_value != switch_) {
+    write_charging_switch(switch_);
+    charging_switch_value = switch_; // Update the global value after writing
+  }
+
+  bool switch_off = (switch_ == off_switch);
+  bool switch_on = (switch_ == on_switch);
+
+  for (int i = 0; i < wait_time; ++i) {
+    bool current_status = is_charging();
+    if ((switch_off && !current_status && current_now == 0) ||
+        (switch_on && current_status && current_now < 0)) {
+      ALOGD("Current is %dmA", current_now);
       return;
     }
-    file << switch_;
+    ALOGD("Waiting %d second...", i + 1);
+    this_thread::sleep_for(chrono::seconds(1));
   }
-
-  // Somebody explain why above code is not executed
-  // when I ise one if
-  if (charging_switch_value != switch_) {
-    ALOGD("Charging switch value: %s", charging_switch_value.c_str());
-
-    if (switch_ == off_switch) {
-      ALOGD("Switching off charging");
-      for (int i = 0; i < wait_time; ++i) {
-        current_now = read_current_now();
-        if (!is_charging()) {
-          ALOGD("Current is %dmA", current_now);
-          return;
-        }
-        ALOGD("Waiting %d second...", i + 1);
-        this_thread::sleep_for(chrono::seconds(1));
-      }
-    } else if (switch_ == on_switch) {
-      ALOGD("Switching on charging");
-      for (int i = 0; i < wait_time; ++i) {
-        if (is_charging()) {
-          ALOGD("Current is %dmA", current_now);
-          return;
-        }
-        ALOGD("Waiting %d second...", i + 1);
-        this_thread::sleep_for(chrono::seconds(1));
-      }
-    }
-    ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
-  }
+  ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
 }
 
 string get_value_from_db(sqlite3 *db, const string &key) {
@@ -419,28 +408,28 @@ void limiter_service(const string &db_file) {
       if (capacity >= capacity_limit) {
         if (is_charging()) {
           ALOGI("Capacity limit reached (%d%%)", capacity_limit);
+          set_charging_switch(off_switch);
         }
-        battery_switch(off_switch);
       }
 
       // Temperature controller
       if (read_bat_temp() >= temp_limit) {
         ALOGI("Temperature limit reached (%.1f°C)", temp_limit / 10.0);
-        battery_switch(off_switch);
+        set_charging_switch(off_switch);
 
         // Wait until cooled off
-        while (read_bat_temp() > temp_limit - 10) {
+        while (read_bat_temp() > temp_limit) {
           this_thread::sleep_for(chrono::seconds(1));
         }
         // Restore last charging_switch_value
-        battery_switch(charging_switch_value);
+        set_charging_switch(charging_switch_value);
       }
 
       // Cooldown before charging to capacity_limit again
       if (capacity <= recharging_limit && (!is_charging())) {
-        ALOGI("Battery level is dropped to recharging limit (%d%%)",
+        ALOGI("Battery level is dropped below recharging limit (%d%%)",
               capacity_limit);
-        battery_switch(on_switch);
+        set_charging_switch(on_switch);
       }
     }
 
@@ -460,7 +449,7 @@ void limiter_service(const string &db_file) {
   }
 }
 
-sqlite3 *open_database(const std::string &db_file) {
+sqlite3 *open_database(const string &db_file) {
   sqlite3 *db = nullptr;
   if (sqlite3_open(db_file.c_str(), &db)) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
@@ -477,7 +466,7 @@ void update_config(sqlite3 *db, const string &key, const string &value) {
     execute_sql(db, sql);
     ALOGD("Config updated for key: %s with value: %s", key.c_str(),
           value.c_str());
-  } catch (const std::exception &e) {
+  } catch (const exception &e) {
     ALOGE("Failed to update config for key: %s with value: %s. Error: %s",
           key.c_str(), value.c_str(), e.what());
   }
@@ -505,8 +494,8 @@ void print_usage() {
        << endl;
 }
 
-void save_pid(const std::string &zcharge_pid) {
-  std::ofstream file(zcharge_pid);
+void save_pid(const string &zcharge_pid) {
+  ofstream file(zcharge_pid);
   if (file.is_open()) {
     file << getpid(); // Save the PID of the current process
     file.close();
