@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -459,6 +460,15 @@ void limiter_service(const string &db_file) {
   }
 }
 
+sqlite3 *open_database(const std::string &db_file) {
+  sqlite3 *db = nullptr;
+  if (sqlite3_open(db_file.c_str(), &db)) {
+    ALOGE("Can't open database: %s", sqlite3_errmsg(db));
+    return nullptr; // Return nullptr if opening the database fails
+  }
+  return db; // Return the database connection handle if successful
+}
+
 void update_config(sqlite3 *db, const string &key, const string &value) {
   string sql = "UPDATE zcharge_config SET value = '" + value +
                "' WHERE key = '" + key + "';";
@@ -471,30 +481,6 @@ void update_config(sqlite3 *db, const string &key, const string &value) {
     ALOGE("Failed to update config for key: %s with value: %s. Error: %s",
           key.c_str(), value.c_str(), e.what());
   }
-}
-
-void enable_zcharge(const string &db_file) {
-  sqlite3 *db;
-  if (sqlite3_open(db_file.c_str(), &db)) {
-    ALOGE("Can't open database: %s", sqlite3_errmsg(db));
-    return;
-  }
-
-  update_config(db, "enabled", "1");
-  sqlite3_close(db);
-  ALOGD("zcharge enabled");
-}
-
-void disable_zcharge(const string &db_file) {
-  sqlite3 *db;
-  if (sqlite3_open(db_file.c_str(), &db)) {
-    ALOGE("Can't open database: %s", sqlite3_errmsg(db));
-    return;
-  }
-
-  update_config(db, "enabled", "0");
-  sqlite3_close(db);
-  ALOGD("zcharge disabled");
 }
 
 void print_usage() {
@@ -530,8 +516,8 @@ void save_pid(const std::string &zcharge_pid) {
 }
 
 int main(int argc, char *argv[]) {
-  const std::string default_db_file = "/data/adb/zcharge/zcharge.db";
-  const std::string zcharge_pid =
+  const string default_db_file = "/data/adb/zcharge/zcharge.db";
+  const string zcharge_pid =
       "/data/adb/zcharge/zcharge.pid"; // Path to the PID file
 
   // Signal handling
@@ -542,26 +528,52 @@ int main(int argc, char *argv[]) {
   if (argc > 4) {
     print_usage();
     return EXIT_FAILURE;
-  } else if (argc == 4 && std::string(argv[1]) == "--convert") {
-    std::string old_config = argv[2];
-    std::string new_config = argv[3];
+  } else if (argc == 4 && string(argv[1]) == "--convert") {
+    string old_config = argv[2];
+    string new_config = argv[3];
+
     conf_to_db(new_config, old_config);
-    return 0;
-  } else if (argc == 2 && (std::string(argv[1]) == "-h" ||
-                           std::string(argv[1]) == "--help")) {
+    return EXIT_SUCCESS;
+  } else if (argc == 2 &&
+             (string(argv[1]) == "-h" || string(argv[1]) == "--help")) {
     print_usage();
-    return 0;
-  } else if (argc == 2 && std::string(argv[1]) == "--reload") {
+    return EXIT_SUCCESS;
+  } else if (argc == 2 && string(argv[1]) == "--reload") {
     send_reload_signal(zcharge_pid);
-    return 0;
-  } else if ((argc == 3 || argc == 2) && std::string(argv[1]) == "--enable") {
-    std::string db_file = (argc == 3) ? argv[2] : default_db_file;
-    enable_zcharge(db_file);
-    return 0;
-  } else if ((argc == 3 || argc == 2) && std::string(argv[1]) == "--disable") {
-    std::string db_file = (argc == 3) ? argv[2] : default_db_file;
-    disable_zcharge(db_file);
-    return 0;
+    return EXIT_SUCCESS;
+  } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--enable") {
+    string db_file = (argc == 3) ? argv[2] : default_db_file;
+    sqlite3 *db = open_database(db_file);
+
+    update_config(db, "enabled", "1");
+    sqlite3_close(db);
+    ALOGD("zcharge enabled");
+    return EXIT_SUCCESS;
+  } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--disable") {
+    string db_file = (argc == 3) ? argv[2] : default_db_file;
+    sqlite3 *db = open_database(db_file);
+
+    update_config(db, "enabled", "0");
+    sqlite3_close(db);
+    ALOGD("zcharge disabled");
+    return EXIT_SUCCESS;
+  } else if ((argc == 3 || argc == 4) && string(argv[1]) == "--update") {
+    string db_file = (argc == 4) ? argv[1] : default_db_file;
+    string key_value = (argc == 3) ? argv[2] : argv[3];
+    size_t pos = key_value.find('=');
+
+    if (pos == string::npos) {
+      ALOGE("Invalid key-value pair: %s", key_value.c_str());
+      return EXIT_FAILURE;
+    }
+
+    string key = key_value.substr(0, pos);
+    string value = key_value.substr(pos + 1);
+    sqlite3 *db = open_database(db_file);
+
+    update_config(db, key, value);
+    sqlite3_close(db);
+    return EXIT_SUCCESS;
   }
 
   // Daemonize the process
@@ -589,9 +601,9 @@ int main(int argc, char *argv[]) {
   save_pid(zcharge_pid);
 
   // Start limiter_service
-  std::string db_file = (argc == 2) ? argv[1] : default_db_file;
-  std::thread service_thread(limiter_service, db_file);
+  string db_file = (argc == 2) ? argv[1] : default_db_file;
+  thread service_thread(limiter_service, db_file);
   service_thread.join();
 
-  return 0;
+  return EXIT_SUCCESS;
 }
