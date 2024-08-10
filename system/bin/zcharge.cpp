@@ -24,7 +24,7 @@ using namespace std;
 string on_switch, off_switch, switch_, charging_switch_path,
     charging_switch_value, charging_state;
 int current_now;
-bool enabled;
+bool enabled, cooling_off = false;
 volatile sig_atomic_t reload_config = 0;
 
 bool send_reload_signal(const string &zcharge_pid) {
@@ -73,14 +73,16 @@ void notif(const char *format, ...) {
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
 
-  string command =
-      "su -lp 2000 -c \"cmd notification post -S bigtext -t 'zcharge' 'Tag' '" +
-      string(buffer) + "'\"";
+  string command = "su -lp 2000 -c \"cmd notification post -S bigtext -t "
+                   "'zcharge' 'zcharge' '" +
+                   string(buffer) + "' -c 'broadcast'\"";
   int result = system(command.c_str());
+
   if (result != 0) {
     ALOGE("system command failed: %d", result);
+  } else {
+    ALOGD("Notification sent: succes(%d)", result);
   }
-  ALOGD("Notification sent: succes(%d)", result);
 }
 
 void execute_sql(sqlite3 *db, const string &sql) {
@@ -253,27 +255,26 @@ void write_charging_switch(const string &value) {
 
 void set_charging_switch(const string &switch_) {
   constexpr int wait_time = 20;
-
   // Write the new value to the charging switch file only if necessary
-  if (charging_switch_value != switch_) {
+  if (charging_switch_value != switch_ && !cooling_off) {
     write_charging_switch(switch_);
     charging_switch_value = switch_; // Update the global value after writing
-  }
 
-  bool switch_off = (switch_ == off_switch);
-  bool switch_on = (switch_ == on_switch);
+    bool switch_off = (switch_ == off_switch);
+    bool switch_on = (switch_ == on_switch);
 
-  for (int i = 0; i < wait_time; ++i) {
-    bool current_status = is_charging();
-    if ((switch_off && !current_status && current_now == 0) ||
-        (switch_on && current_status && current_now < 0)) {
-      ALOGD("Current is %dmA", current_now);
-      return;
+    for (int i = 0; i < wait_time; ++i) {
+      bool current_status = is_charging();
+      if ((switch_off && !current_status && current_now == 0) ||
+          (switch_on && current_status && current_now < 0)) {
+        ALOGD("Current is %dmA", current_now);
+        return;
+      }
+      ALOGD("Waiting %d second...", i + 1);
+      this_thread::sleep_for(chrono::seconds(1));
     }
-    ALOGD("Waiting %d second...", i + 1);
-    this_thread::sleep_for(chrono::seconds(1));
+    ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
   }
-  ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
 }
 
 string get_value_from_db(sqlite3 *db, const string &key) {
@@ -321,9 +322,10 @@ void limiter_service(const string &db_file) {
   }
 
   // Initial configuration load
-  int recharging_limit = 75, capacity_limit = 85, temp_limit = 410;
+  int recharging_limit = 75, capacity_limit = 85, temp_limit = 410, temperature;
   bool plugged = false;
   string sql = "SELECT key, value FROM zcharge_config";
+  string bc_switch_value;
   sqlite3_stmt *stmt;
 
   auto load_config = [&]() {
@@ -413,16 +415,16 @@ void limiter_service(const string &db_file) {
       }
 
       // Temperature controller
-      if (read_bat_temp() >= temp_limit) {
-        ALOGI("Temperature limit reached (%.1f°C)", temp_limit / 10.0);
+      temperature = read_bat_temp();
+      if (temperature > temp_limit) {
+        ALOGI("Temperature exceed limit (%.1f°C)", temp_limit / 10.0);
         set_charging_switch(off_switch);
-
-        // Wait until cooled off
-        while (read_bat_temp() > temp_limit) {
-          this_thread::sleep_for(chrono::seconds(1));
-        }
+        bc_switch_value = charging_switch_value;
+        cooling_off = true;
+      } else if (temperature < temp_limit && cooling_off) {
+        cooling_off = false;
         // Restore last charging_switch_value
-        set_charging_switch(charging_switch_value);
+        set_charging_switch(bc_switch_value);
       }
 
       // Cooldown before charging to capacity_limit again
@@ -488,7 +490,7 @@ void print_usage() {
           "the config."
        << endl;
   cout
-      << "  --update <key=value> [config_db]          Update the configuration "
+      << "  --update <key=value> [config_db]         Update the configuration "
          "value for the specified key. If [config_db] is omitted, uses default."
       << endl;
   cout << "  -h, --help                               Show this help message "
