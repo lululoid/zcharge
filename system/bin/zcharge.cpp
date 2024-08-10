@@ -426,7 +426,7 @@ void limiter_service(const string &db_file) {
       }
 
       // Cooldown before charging to capacity_limit again
-      if (capacity <= recharging_limit && (!is_charging())) {
+      if (capacity < recharging_limit && (!is_charging())) {
         ALOGI("Battery level is dropped below recharging limit (%d%%)",
               capacity_limit);
         set_charging_switch(on_switch);
@@ -485,13 +485,23 @@ void print_usage() {
           "specified database file (or default)."
        << endl;
   cout << "  --reload                                 Tell service to reload "
-          "the "
-          "config."
+          "the config."
        << endl;
+  cout
+      << "  --update <key=value> [config_db]          Update the configuration "
+         "value for the specified key. If [config_db] is omitted, uses default."
+      << endl;
   cout << "  -h, --help                               Show this help message "
-          "and "
-          "exit."
+          "and exit."
        << endl;
+  cout << endl;
+  cout << "Example key-value pairs:" << endl;
+  cout << "  charging_switch_path=/path/to/switch" << endl;
+  cout << "  charging_switch_on=1" << endl;
+  cout << "  charging_switch_off=0" << endl;
+  cout << "  recharging_limit=75" << endl;
+  cout << "  capacity_limit=85" << endl;
+  cout << "  temperature_limit=410" << endl;
 }
 
 void save_pid(const string &zcharge_pid) {

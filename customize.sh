@@ -39,5 +39,5 @@ loger I "
 ⟩ Starting logcat for zcharge in $LOG
 "
 start_zcharge_logcat
-cp zcharge $NVBASE/modules/zcharge/system/bin
+cp $MODBIN/zcharge $NVBASE/modules/zcharge/system/bin
 cp $MODPATH/modules/arsenal.sh $NVBASE/modules/zcharge/modules
