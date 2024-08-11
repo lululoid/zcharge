@@ -20,6 +20,7 @@ using namespace std;
 #define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define ALOGI(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define ALOGW(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 string on_switch, off_switch, switch_, charging_switch_path,
     charging_switch_value, charging_state;
@@ -30,13 +31,13 @@ volatile sig_atomic_t reload_config = 0;
 bool send_reload_signal(const string &zcharge_pid) {
   ifstream file(zcharge_pid);
   if (!file.is_open()) {
-    ALOGE("Failed to open PID file: %s", zcharge_pid.c_str());
+    ALOGW("Failed to open PID file: %s", zcharge_pid.c_str());
     return false;
   }
 
   pid_t pid;
   if (!(file >> pid)) {
-    ALOGE("Failed to read PID from file: %s", zcharge_pid.c_str());
+    ALOGW("Failed to read PID from file: %s", zcharge_pid.c_str());
     file.close();
     return false;
   }
@@ -48,7 +49,7 @@ bool send_reload_signal(const string &zcharge_pid) {
   }
 
   if (kill(pid, SIGHUP) != 0) {
-    ALOGE("Failed to send SIGHUP to process with PID: %d", pid);
+    ALOGW("Failed to send SIGHUP to process with PID: %d", pid);
     return false;
   }
 
@@ -59,7 +60,7 @@ void signal_handler(int signum) {
   if (signum == SIGHUP) {
     reload_config = 1;
   } else if (signum == SIGTERM) {
-    ALOGE("zcharge terminated");
+    ALOGW("zcharge terminated");
     exit(signum);
   } else {
     ALOGE("Received invalid signal: %d", signum);
@@ -73,13 +74,14 @@ void notif(const char *format, ...) {
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
 
-  string command = "su -lp 2000 -c \"cmd notification post -S bigtext -t "
-                   "'zcharge' 'zcharge' '" +
-                   string(buffer) + "' -c 'broadcast'\"";
+  string command =
+      "command su -lp 2000 -c \"cmd notification post -S bigtext -t "
+      "'zcharge' 'zcharge' '" +
+      string(buffer) + "'\"";
   int result = system(command.c_str());
 
   if (result != 0) {
-    ALOGE("system command failed: %d", result);
+    ALOGE("system command failed: (%d)", result);
   } else {
     ALOGD("Notification sent: succes(%d)", result);
   }
@@ -323,7 +325,7 @@ void limiter_service(const string &db_file) {
 
   // Initial configuration load
   int recharging_limit = 75, capacity_limit = 85, temp_limit = 410, temperature;
-  bool plugged = false;
+  bool plugged = false, notified = false;
   string sql = "SELECT key, value FROM zcharge_config";
   string bc_switch_value;
   sqlite3_stmt *stmt;
@@ -442,9 +444,12 @@ void limiter_service(const string &db_file) {
       }
 
       // Avoid discharging below 30%
-      if (capacity == 30) {
+      if (!notified && capacity == 30) {
         notif("Battery is %d%%, charge your phone to increase battery lifespan",
               capacity);
+        notified = true;
+      } else if (notified && capacity != 30) {
+        notified = false;
       }
     }
     this_thread::sleep_for(chrono::seconds(1));
