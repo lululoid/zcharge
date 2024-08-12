@@ -29,7 +29,7 @@ killall $TAG &&
 	loger I "
 ⟩ zcharge terminated"
 
-zcharge &&
+su -c 'zcharge' &&
 	loger I "
 ⟩ zcharge started
 "

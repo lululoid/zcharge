@@ -9,5 +9,5 @@ set -x # Prints commands, prefixing them with a character stored in an environme
 echo "
 ⟩ $(date -Is)" >>$LOG
 
-zcharge
+su -c zcharge
 start_zcharge_logcat
