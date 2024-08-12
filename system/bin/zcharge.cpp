@@ -25,7 +25,7 @@ using namespace std;
 string on_switch, off_switch, switch_, charging_switch_path,
     charging_switch_value, charging_state;
 int current_now;
-bool enabled, cooling_off = false;
+bool enabled;
 volatile sig_atomic_t reload_config = 0;
 
 bool send_reload_signal(const string &zcharge_pid) {
@@ -44,7 +44,7 @@ bool send_reload_signal(const string &zcharge_pid) {
   file.close();
 
   if (pid <= 0) {
-    ALOGE("Invalid PID in file: %s", zcharge_pid.c_str());
+    ALOGW("Invalid PID in file: %s", zcharge_pid.c_str());
     return false;
   }
 
@@ -54,17 +54,6 @@ bool send_reload_signal(const string &zcharge_pid) {
   }
 
   return true;
-}
-
-void signal_handler(int signum) {
-  if (signum == SIGHUP) {
-    reload_config = 1;
-  } else if (signum == SIGTERM) {
-    ALOGW("zcharge terminated");
-    exit(signum);
-  } else {
-    ALOGE("Received invalid signal: %d", signum);
-  }
 }
 
 void notif(const char *format, ...) {
@@ -81,9 +70,9 @@ void notif(const char *format, ...) {
   int result = system(command.c_str());
 
   if (result != 0) {
-    ALOGE("system command failed: (%d)", result);
+    ALOGE("System command failed: Error code %d", result);
   } else {
-    ALOGD("Notification sent: succes(%d)", result);
+    ALOGD("Notification sent: succes: Success code %d", result);
   }
 }
 
@@ -148,7 +137,7 @@ void conf_to_db(const string &db_file, const string &config_file) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
     return;
   }
-  ALOGD("Opened database successfully");
+  ALOGI("Opened database successfully");
 
   const char *create_table_sql = R"(
         CREATE TABLE IF NOT EXISTS zcharge_config (
@@ -167,7 +156,7 @@ void conf_to_db(const string &db_file, const string &config_file) {
     return;
   }
 
-  ALOGD("Table created or verified successfully");
+  ALOGI("Table created or verified successfully");
 
   // Parsing configuration and inserting into the database
   parse_and_insert_config(db, config_file);
@@ -175,10 +164,10 @@ void conf_to_db(const string &db_file, const string &config_file) {
   if (sqlite3_close(db) != SQLITE_OK) {
     ALOGE("Failed to close database: %s", sqlite3_errmsg(db));
   } else {
-    ALOGD("Database closed successfully");
+    ALOGI("Database closed successfully");
   }
 
-  ALOGD("Configuration inserted into the database successfully");
+  ALOGI("Configuration inserted into the database successfully");
 }
 
 int read_bat_temp() {
@@ -258,7 +247,7 @@ void write_charging_switch(const string &value) {
 void set_charging_switch(const string &switch_) {
   constexpr int wait_time = 20;
   // Write the new value to the charging switch file only if necessary
-  if (charging_switch_value != switch_ && !cooling_off) {
+  if (charging_switch_value != switch_) {
     write_charging_switch(switch_);
     charging_switch_value = switch_; // Update the global value after writing
 
@@ -270,12 +259,29 @@ void set_charging_switch(const string &switch_) {
       if ((switch_off && !current_status && current_now == 0) ||
           (switch_on && current_status && current_now < 0)) {
         ALOGD("Current is %dmA", current_now);
+        if (current_status) {
+          ALOGI("Charging turned on");
+        } else
+          ALOGI("Charging turned off");
         return;
       }
-      ALOGD("Waiting %d second...", i + 1);
+      ALOGI("Waiting %d second...", i + 1);
       this_thread::sleep_for(chrono::seconds(1));
     }
-    ALOGD("Waited %d seconds, current is %dmA", wait_time, current_now);
+    ALOGI("Waited %d seconds, current is %dmA", wait_time, current_now);
+  }
+}
+
+void signal_handler(int signum) {
+  if (signum == SIGHUP) {
+    reload_config = 1;
+  } else if (signum == SIGTERM) {
+    // restore value
+    write_charging_switch(on_switch);
+    ALOGW("zcharge terminated");
+    exit(signum);
+  } else {
+    ALOGE("Received invalid signal: %d", signum);
   }
 }
 
@@ -294,16 +300,6 @@ string get_value_from_db(sqlite3 *db, const string &key) {
   return value;
 }
 
-string get_charging_switch_path(sqlite3 *db) {
-  charging_switch_path = get_value_from_db(db, "charging_switch_path");
-
-  if (charging_switch_path.empty()) {
-    ALOGE("Failed to retrieve 'charging_switch_path' from the database");
-  }
-
-  return charging_switch_path;
-}
-
 string get_value_from_charging_switch(const string &path) {
   ifstream file(path);
   if (!file.is_open()) {
@@ -316,7 +312,7 @@ string get_value_from_charging_switch(const string &path) {
 }
 
 void limiter_service(const string &db_file) {
-  ALOGD("Starting limiter_service");
+  ALOGI("Starting limiter_service");
   sqlite3 *db;
   if (sqlite3_open(db_file.c_str(), &db)) {
     ALOGE("Can't open database: %s", sqlite3_errmsg(db));
@@ -325,7 +321,7 @@ void limiter_service(const string &db_file) {
 
   // Initial configuration load
   int recharging_limit, capacity_limit, temp_limit, temperature;
-  bool plugged = false, notified = false, cooldown = false;
+  bool plugged = false, notified = false, cooldown = true, cooling_off = false;
   string sql = "SELECT key, value FROM zcharge_config";
   string bc_switch_value;
   sqlite3_stmt *stmt;
@@ -374,7 +370,7 @@ void limiter_service(const string &db_file) {
 
   while (enabled) {
     if (reload_config) {
-      ALOGD("Reloading configuration...");
+      ALOGI("Reloading configuration...");
       reload_config = 0;
       if (sqlite3_open(db_file.c_str(), &db)) {
         ALOGE("Can't reopen database: %s", sqlite3_errmsg(db));
@@ -414,7 +410,7 @@ void limiter_service(const string &db_file) {
         ALOGI("Capacity limit reached (%d%%)", capacity_limit);
         set_charging_switch(off_switch);
         cooldown = true; // Cooldown before charging to capacity_limit again
-        ALOGI("Cooldown to %d before charging again", recharging_limit);
+        ALOGI("Cooldown to %d%% before recharging again", recharging_limit);
       } else if (capacity < recharging_limit && cooldown) {
         ALOGI("Battery level(%d%%) is dropped below recharging limit(%d%%)",
               capacity, recharging_limit);
@@ -440,7 +436,7 @@ void limiter_service(const string &db_file) {
 
     if (charging_state == "Discharging") {
       if (plugged) {
-        ALOGD("Charger unplugged");
+        ALOGI("Charger unplugged");
         plugged = false;
       }
 
@@ -472,7 +468,7 @@ void update_config(sqlite3 *db, const string &key, const string &value) {
 
   try {
     execute_sql(db, sql);
-    ALOGD("Config updated for key: %s with value: %s", key.c_str(),
+    ALOGI("Config updated for key: %s with value: %s", key.c_str(),
           value.c_str());
   } catch (const exception &e) {
     ALOGE("Failed to update config for key: %s with value: %s. Error: %s",
@@ -562,7 +558,7 @@ int main(int argc, char *argv[]) {
 
     update_config(db, "enabled", "0");
     sqlite3_close(db);
-    ALOGD("zcharge disabled");
+    ALOGI("zcharge disabled");
     return EXIT_SUCCESS;
   } else if ((argc == 3 || argc == 4) && string(argv[1]) == "--update") {
     string db_file = (argc == 4) ? argv[1] : default_db_file;
