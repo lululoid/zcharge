@@ -37,6 +37,9 @@ if [ -z "$versionCode" ]; then
 	versionCode=$((versionCode + 1))
 fi
 
+SCRIPT_PATH=$(dirname "$(realpath "$0")")
+cd "$SCRIPT_PATH" || exit
+g++ -o system/bin/zcharge system/bin/zcharge.cpp -L/data/data/com.termux/files/usr/lib -lsqlite3 -llog
 # Update module.prop with the new version and versionCode
 sed -i "s/\(^version=v\)[0-9.]*\(.*\)/\1$version\2/; s/\(^versionCode=\)[0-9]*/\1$versionCode/" module.prop
 
@@ -54,3 +57,5 @@ package_name="packages/$module_name-v${version}_$versionCode-beta.zip"
 	zcharge.db \
 	tools.sh \
 	system/lib*
+
+# check_root "You need ROOT to install this module" || su -c "magisk --install-module $package_name"

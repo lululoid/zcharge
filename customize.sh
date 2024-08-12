@@ -29,6 +29,9 @@ killall $TAG &&
 	loger I "
 ⟩ zcharge terminated"
 
+cp $MODBIN/zcharge $NVBASE/modules/zcharge/system/bin
+cp $MODPATH/modules/arsenal.sh $NVBASE/modules/zcharge/modules
+
 su -c 'zcharge' &&
 	loger I "
 ⟩ zcharge started
@@ -39,5 +42,3 @@ loger I "
 ⟩ Starting logcat for zcharge in $LOG
 "
 start_zcharge_logcat
-cp $MODBIN/zcharge $NVBASE/modules/zcharge/system/bin
-cp $MODPATH/modules/arsenal.sh $NVBASE/modules/zcharge/modules
