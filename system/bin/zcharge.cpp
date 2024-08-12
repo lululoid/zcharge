@@ -19,8 +19,8 @@ using namespace std;
 #define LOG_TAG "zcharge"
 #define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-#define ALOGI(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-#define ALOGW(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define ALOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define ALOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 
 string on_switch, off_switch, switch_, charging_switch_path,
     charging_switch_value, charging_state;
@@ -324,8 +324,8 @@ void limiter_service(const string &db_file) {
   }
 
   // Initial configuration load
-  int recharging_limit = 75, capacity_limit = 85, temp_limit = 410, temperature;
-  bool plugged = false, notified = false;
+  int recharging_limit, capacity_limit, temp_limit, temperature;
+  bool plugged = false, notified = false, cooldown = false;
   string sql = "SELECT key, value FROM zcharge_config";
   string bc_switch_value;
   sqlite3_stmt *stmt;
@@ -409,31 +409,32 @@ void limiter_service(const string &db_file) {
         plugged = true;
       }
 
-      if (capacity >= capacity_limit) {
-        if (is_charging()) {
-          ALOGI("Capacity limit reached (%d%%)", capacity_limit);
-          set_charging_switch(off_switch);
-        }
+      // Charging controller
+      if (capacity >= capacity_limit && is_charging()) {
+        ALOGI("Capacity limit reached (%d%%)", capacity_limit);
+        set_charging_switch(off_switch);
+        cooldown = true; // Cooldown before charging to capacity_limit again
+        ALOGI("Cooldown to %d before charging again", recharging_limit);
+      } else if (capacity < recharging_limit && cooldown) {
+        ALOGI("Battery level(%d%%) is dropped below recharging limit(%d%%)",
+              capacity, recharging_limit);
+        set_charging_switch(on_switch);
+        cooldown = false;
       }
 
       // Temperature controller
       temperature = read_bat_temp();
-      if (temperature > temp_limit) {
-        ALOGI("Temperature exceed limit (%.1f°C)", temp_limit / 10.0);
+      if (temperature > temp_limit && is_charging()) {
+        ALOGI("Temperature(%.1f°C) exceed limit(%.1f°C)", temperature / 10.0,
+              temp_limit / 10.0);
         set_charging_switch(off_switch);
-        bc_switch_value = charging_switch_value;
         cooling_off = true;
       } else if (temperature < temp_limit && cooling_off) {
-        cooling_off = false;
+        ALOGI("Temperature is back to normal(%.1f°C), turning on charging...",
+              temp_limit / 10.0);
         // Restore last charging_switch_value
-        set_charging_switch(bc_switch_value);
-      }
-
-      // Cooldown before charging to capacity_limit again
-      if (capacity < recharging_limit && (!is_charging())) {
-        ALOGI("Battery level is dropped below recharging limit (%d%%)",
-              capacity_limit);
         set_charging_switch(on_switch);
+        cooling_off = false;
       }
     }
 
