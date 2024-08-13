@@ -1,4 +1,5 @@
 #include <android/log.h>
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdarg>
@@ -23,10 +24,11 @@ using namespace std;
 #define ALOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 
 string on_switch, off_switch, switch_, charging_switch_path,
-    charging_switch_value, charging_state;
+    charging_switch_value, charging_state, db_file;
 int current_now;
 bool enabled;
 volatile sig_atomic_t reload_config = 0;
+atomic<bool> thread_success{false};
 
 bool send_reload_signal(const string &zcharge_pid) {
   ifstream file(zcharge_pid);
@@ -64,7 +66,7 @@ void notif(const char *format, ...) {
   va_end(args);
 
   string command =
-      "command su -lp 2000 -c \"cmd notification post -S bigtext -t "
+      "su -lp 2000 -c \"command cmd notification post -S bigtext -t "
       "'zcharge' 'zcharge' '" +
       string(buffer) + "'\"";
   int result = system(command.c_str());
@@ -368,88 +370,95 @@ void limiter_service(const string &db_file) {
   load_config();
   sqlite3_close(db);
 
-  while (enabled) {
-    if (reload_config) {
-      ALOGI("Reloading configuration...");
-      reload_config = 0;
-      if (sqlite3_open(db_file.c_str(), &db)) {
-        ALOGE("Can't reopen database: %s", sqlite3_errmsg(db));
-        continue; // Skip this iteration if reopening fails
+  try {
+    while (enabled) {
+      if (reload_config) {
+        ALOGI("Reloading configuration...");
+        reload_config = 0;
+        if (sqlite3_open(db_file.c_str(), &db)) {
+          ALOGE("Can't reopen database: %s", sqlite3_errmsg(db));
+          continue; // Skip this iteration if reopening fails
+        }
+
+        load_config();
+        sqlite3_close(db);
+        continue; // Restart the loop with new config
       }
 
-      load_config();
-      sqlite3_close(db);
-      continue; // Restart the loop with new config
-    }
-
-    int capacity = read_capacity();
-    if (capacity == -1) {
-      ALOGE("Failed to read capacity");
-      this_thread::sleep_for(chrono::seconds(1));
-      continue;
-    }
-
-    charging_state = read_charging_state();
-    if (charging_state.empty()) {
-      ALOGE("Failed to read charging state");
-      this_thread::sleep_for(chrono::seconds(1));
-      continue;
-    }
-
-    if (charging_state == "Charging") {
-      charging_switch_value =
-          get_value_from_charging_switch(charging_switch_path);
-
-      if (!plugged) {
-        ALOGI("Charger plugged");
-        plugged = true;
+      int capacity = read_capacity();
+      if (capacity == -1) {
+        ALOGE("Failed to read capacity");
+        this_thread::sleep_for(chrono::seconds(1));
+        continue;
       }
 
-      // Charging controller
-      if (capacity >= capacity_limit && is_charging()) {
-        ALOGI("Capacity limit reached (%d%%)", capacity_limit);
-        set_charging_switch(off_switch);
-        cooldown = true; // Cooldown before charging to capacity_limit again
-        ALOGI("Cooldown to %d%% before recharging again", recharging_limit);
-      } else if (capacity < recharging_limit && cooldown) {
-        ALOGI("Battery level(%d%%) is dropped below recharging limit(%d%%)",
-              capacity, recharging_limit);
-        set_charging_switch(on_switch);
-        cooldown = false;
+      charging_state = read_charging_state();
+      if (charging_state.empty()) {
+        ALOGE("Failed to read charging state");
+        this_thread::sleep_for(chrono::seconds(1));
+        continue;
       }
 
-      // Temperature controller
-      temperature = read_bat_temp();
-      if (temperature > temp_limit && is_charging()) {
-        ALOGI("Temperature(%.1f°C) exceed limit(%.1f°C)", temperature / 10.0,
-              temp_limit / 10.0);
-        set_charging_switch(off_switch);
-        cooling_off = true;
-      } else if (temperature < temp_limit && cooling_off) {
-        ALOGI("Temperature is back to normal(%.1f°C), turning on charging...",
-              temp_limit / 10.0);
-        // Restore last charging_switch_value
-        set_charging_switch(on_switch);
-        cooling_off = false;
-      }
-    }
+      if (charging_state == "Charging") {
+        charging_switch_value =
+            get_value_from_charging_switch(charging_switch_path);
 
-    if (charging_state == "Discharging") {
-      if (plugged) {
-        ALOGI("Charger unplugged");
-        plugged = false;
+        if (!plugged) {
+          ALOGI("Charger plugged");
+          plugged = true;
+        }
+
+        // Charging controller
+        if (capacity >= capacity_limit && is_charging()) {
+          ALOGI("Capacity limit reached (%d%%)", capacity_limit);
+          set_charging_switch(off_switch);
+          cooldown = true; // Cooldown before charging to capacity_limit again
+          ALOGI("Cooldown to %d%% before recharging again", recharging_limit);
+        } else if (capacity < recharging_limit && cooldown) {
+          ALOGI("Battery level(%d%%) is dropped below recharging limit(%d%%)",
+                capacity, recharging_limit);
+          set_charging_switch(on_switch);
+          cooldown = false;
+        }
+
+        // Temperature controller
+        temperature = read_bat_temp();
+        if (temperature > temp_limit && is_charging()) {
+          ALOGI("Temperature(%.1f°C) exceed limit(%.1f°C)", temperature / 10.0,
+                temp_limit / 10.0);
+          set_charging_switch(off_switch);
+          cooling_off = true;
+        } else if (temperature < temp_limit && cooling_off) {
+          ALOGI("Temperature is back to normal(%.1f°C), turning on charging...",
+                temp_limit / 10.0);
+          // Restore last charging_switch_value
+          set_charging_switch(on_switch);
+          cooling_off = false;
+        }
       }
 
-      // Avoid discharging below 30%
-      if (!notified && capacity == 30) {
-        notif("Battery is %d%%, charge your phone to increase battery lifespan",
+      if (charging_state == "Discharging") {
+        if (plugged) {
+          ALOGI("Charger unplugged");
+          plugged = false;
+        }
+
+        // Avoid discharging below 30%
+        if (!notified && capacity == 30) {
+          notif(
+              "Battery is %d%%, charge your phone to increase battery lifespan",
               capacity);
-        notified = true;
-      } else if (notified && capacity != 30) {
-        notified = false;
+          notified = true;
+        } else if (notified && capacity != 30) {
+          notified = false;
+        }
       }
+      this_thread::sleep_for(chrono::seconds(1));
     }
-    this_thread::sleep_for(chrono::seconds(1));
+    thread_success = true;
+  } catch (const exception &e) {
+    ALOGE("Exception in limiter_service: %s", e.what());
+    thread_success = false;
   }
 }
 
@@ -508,13 +517,60 @@ void print_usage() {
   cout << "  temperature_limit=410" << endl;
 }
 
-void save_pid(const string &zcharge_pid) {
-  ofstream file(zcharge_pid);
+void save_pid(const string &pid_file) {
+  ofstream file(pid_file);
   if (file.is_open()) {
     file << getpid(); // Save the PID of the current process
     file.close();
   } else {
-    ALOGE("Failed to open PID file for writing: %s", zcharge_pid.c_str());
+    ALOGE("Failed to open PID file for writing: %s", pid_file.c_str());
+  }
+}
+
+void daemonize_process(const string &zcharge_pid) {
+  pid_t pid, sid;
+  // Fork the process
+  pid = fork();
+  if (pid < 0) {
+    exit(EXIT_FAILURE);
+  }
+
+  if (pid > 0) {
+    exit(EXIT_SUCCESS); // Parent process exits
+  }
+
+  // Set file mode creation mask to 0
+  umask(0);
+
+  // Create a new session ID
+  sid = setsid();
+  if (sid < 0) {
+    exit(EXIT_FAILURE);
+  }
+
+  // Change the working directory to root
+  if (chdir("/") < 0) {
+    exit(EXIT_FAILURE);
+  }
+
+  // Close standard file descriptors
+  close(STDIN_FILENO);
+  close(STDOUT_FILENO);
+  close(STDERR_FILENO);
+
+  // Save the PID to a file
+  save_pid(zcharge_pid);
+
+  // Start the limiter service
+  thread service_thread(limiter_service, db_file);
+  service_thread.join();
+
+  // Check if the thread succeeded
+  if (thread_success) {
+    notif("zcharge started successfully.");
+    ALOGI("Service started successfully.");
+  } else {
+    ALOGE("Thread failed.");
   }
 }
 
@@ -579,34 +635,10 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
   }
 
-  // Daemonize the process
-  pid_t pid, sid;
-  pid = fork();
-  if (pid < 0) {
-    exit(EXIT_FAILURE);
-  }
-  if (pid > 0) {
-    exit(EXIT_SUCCESS); // Parent exits
-  }
-
-  umask(0); // Set file mode creation mask to 0
-
-  sid = setsid(); // Create a new session ID
-  if (sid < 0) {
-    exit(EXIT_FAILURE);
-  }
-
-  if (chdir("/") < 0) { // Change working directory
-    exit(EXIT_FAILURE);
-  }
-
+  string db_file = (argc == 2) ? argv[1] : default_db_file;
   // Save the PID to a file
   save_pid(zcharge_pid);
-
   // Start limiter_service
-  string db_file = (argc == 2) ? argv[1] : default_db_file;
-  thread service_thread(limiter_service, db_file);
-  service_thread.join();
-
+  daemonize_process(zcharge_pid);
   return EXIT_SUCCESS;
 }

@@ -32,7 +32,7 @@ killall $TAG &&
 cp $MODBIN/zcharge $NVBASE/modules/zcharge/system/bin
 cp $MODPATH/modules/arsenal.sh $NVBASE/modules/zcharge/modules
 
-su -c 'zcharge' &&
+su -c zcharge &&
 	loger I "
 ⟩ zcharge started
 "
