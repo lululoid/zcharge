@@ -1,5 +1,4 @@
 #include <android/log.h>
-#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdarg>
@@ -26,27 +25,26 @@ using namespace std;
 string on_switch, off_switch, switch_, charging_switch_path,
     charging_switch_value, charging_state, db_file;
 int current_now;
-bool enabled;
+bool enabled, thread_success = false;
 volatile sig_atomic_t reload_config = 0;
-atomic<bool> thread_success{false};
 
-bool send_reload_signal(const string &zcharge_pid) {
-  ifstream file(zcharge_pid);
+bool send_reload_signal(const string &zcharge_pid_file) {
+  ifstream file(zcharge_pid_file);
   if (!file.is_open()) {
-    ALOGW("Failed to open PID file: %s", zcharge_pid.c_str());
+    ALOGW("Failed to open PID file: %s", zcharge_pid_file.c_str());
     return false;
   }
 
   pid_t pid;
   if (!(file >> pid)) {
-    ALOGW("Failed to read PID from file: %s", zcharge_pid.c_str());
+    ALOGW("Failed to read PID from file: %s", zcharge_pid_file.c_str());
     file.close();
     return false;
   }
   file.close();
 
   if (pid <= 0) {
-    ALOGW("Invalid PID in file: %s", zcharge_pid.c_str());
+    ALOGW("Invalid PID in file: %s", zcharge_pid_file.c_str());
     return false;
   }
 
@@ -74,7 +72,7 @@ void notif(const char *format, ...) {
   if (result != 0) {
     ALOGE("System command failed: Error code %d", result);
   } else {
-    ALOGD("Notification sent: succes: Success code %d", result);
+    ALOGD("Notification sent: Success code %d", result);
   }
 }
 
@@ -453,9 +451,13 @@ void limiter_service(const string &db_file) {
           notified = false;
         }
       }
+
+      if (!thread_success) {
+        notif("zcharge started successfully.");
+        thread_success = true;
+      }
       this_thread::sleep_for(chrono::seconds(1));
     }
-    thread_success = true;
   } catch (const exception &e) {
     ALOGE("Exception in limiter_service: %s", e.what());
     thread_success = false;
@@ -527,7 +529,7 @@ void save_pid(const string &pid_file) {
   }
 }
 
-void daemonize_process(const string &zcharge_pid) {
+void daemonize_process(const string &zcharge_pid_file) {
   pid_t pid, sid;
   // Fork the process
   pid = fork();
@@ -559,24 +561,16 @@ void daemonize_process(const string &zcharge_pid) {
   close(STDERR_FILENO);
 
   // Save the PID to a file
-  save_pid(zcharge_pid);
+  save_pid(zcharge_pid_file);
 
   // Start the limiter service
   thread service_thread(limiter_service, db_file);
   service_thread.join();
-
-  // Check if the thread succeeded
-  if (thread_success) {
-    notif("zcharge started successfully.");
-    ALOGI("Service started successfully.");
-  } else {
-    ALOGE("Thread failed.");
-  }
 }
 
 int main(int argc, char *argv[]) {
   const string default_db_file = "/data/adb/zcharge/zcharge.db";
-  const string zcharge_pid =
+  const string zcharge_pid_file =
       "/data/adb/zcharge/zcharge.pid"; // Path to the PID file
 
   // Signal handling
@@ -598,7 +592,7 @@ int main(int argc, char *argv[]) {
     print_usage();
     return EXIT_SUCCESS;
   } else if (argc == 2 && string(argv[1]) == "--reload") {
-    send_reload_signal(zcharge_pid);
+    send_reload_signal(zcharge_pid_file);
     return EXIT_SUCCESS;
   } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--enable") {
     string db_file = (argc == 3) ? argv[2] : default_db_file;
@@ -635,10 +629,12 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
   }
 
-  string db_file = (argc == 2) ? argv[1] : default_db_file;
-  // Save the PID to a file
-  save_pid(zcharge_pid);
+  db_file = (argc == 2) ? argv[1] : default_db_file;
   // Start limiter_service
-  daemonize_process(zcharge_pid);
+  daemonize_process(zcharge_pid_file);
+
+  if (!thread_success) {
+    return EXIT_FAILURE;
+  }
   return EXIT_SUCCESS;
 }
