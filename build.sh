@@ -45,9 +45,10 @@ sed -i "s/\(^version=v\)[0-9.]*\(.*\)/\1$version\2/; s/\(^versionCode=\)[0-9]*/\
 
 # Extract module name
 module_name=$(sed -n 's/^id=\(.*\)/\1/p' module.prop)
+variant=$(awk -F'-' '/^version=/{print $2}' module.prop)
 
 # Create a zip package
-package_name="packages/$module_name-v${version}_$versionCode-beta.zip"
+package_name="packages/$module_name-v${version}_$versionCode-$variant.zip"
 7za a "$package_name" \
 	META-INF \
 	customize.sh \
