@@ -1,3 +1,4 @@
+#include "sqlite3.h"
 #include <android/log.h>
 #include <chrono>
 #include <csignal>
@@ -7,7 +8,6 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
-#include <sqlite3.h>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
@@ -356,9 +356,6 @@ void limiter_service(const string &db_file) {
       ALOGD("on_switch: %s", on_switch.c_str());
       ALOGD("off_switch: %s", off_switch.c_str());
       ALOGD("charging_switch_path: %s", charging_switch_path.c_str());
-      ALOGD("Entering main loop");
-      ALOGD("Current: %dmA", read_current_now());
-
     } else {
       ALOGE("Failed to execute query: %s", sqlite3_errmsg(db));
     }
@@ -369,6 +366,8 @@ void limiter_service(const string &db_file) {
   sqlite3_close(db);
 
   try {
+    ALOGD("Entering main loop");
+    ALOGD("Current: %dmA", read_current_now());
     while (enabled) {
       if (reload_config) {
         ALOGI("Reloading configuration...");
@@ -484,6 +483,8 @@ void update_config(sqlite3 *db, const string &key, const string &value) {
   } catch (const exception &e) {
     ALOGE("Failed to update config for key: %s with value: %s. Error: %s",
           key.c_str(), value.c_str(), e.what());
+    cerr << "Failed to update config for key: " << key.c_str()
+         << "with value: " << value.c_str() << "Error: " << e.what() << endl;
   }
 }
 

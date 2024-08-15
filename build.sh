@@ -39,7 +39,12 @@ fi
 
 SCRIPT_PATH=$(dirname "$(realpath "$0")")
 cd "$SCRIPT_PATH" || exit
-g++ -o system/bin/zcharge system/bin/zcharge.cpp -L/data/data/com.termux/files/usr/lib -lsqlite3 -llog
+
+# Compiling the program here
+echo "Compiling zcharge..."
+make &&
+	echo "Done"
+
 # Update module.prop with the new version and versionCode
 sed -i "s/\(^version=v\)[0-9.]*\(.*\)/\1$version\2/; s/\(^versionCode=\)[0-9]*/\1$versionCode/" module.prop
 
@@ -56,7 +61,6 @@ package_name="packages/$module_name-v${version}_$versionCode-$variant.zip"
 	service.sh \
 	system/bin/zcharge \
 	zcharge.db \
-	tools.sh \
-	system/lib*
+	tools.sh
 
 # check_root "You need ROOT to install this module" || su -c "magisk --install-module $package_name"
