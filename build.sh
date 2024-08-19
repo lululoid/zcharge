@@ -42,8 +42,12 @@ cd "$SCRIPT_PATH" || exit
 
 # Compiling the program here
 echo "Compiling zcharge..."
-make &&
+if make; then
 	echo "Done"
+else
+	echo "Error while compiling zcharge"
+	exit 1
+fi
 
 # Update module.prop with the new version and versionCode
 sed -i "s/\(^version=v\)[0-9.]*\(.*\)/\1$version\2/; s/\(^versionCode=\)[0-9]*/\1$versionCode/" module.prop

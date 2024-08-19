@@ -667,7 +667,7 @@ int main(int argc, char *argv[]) {
 
   if (!pidFile.is_open()) {
     cerr << "Error: Could not open PID file." << endl;
-    return EXIT_FAILURE;
+    ALOGE("Error: Could not open PID file.");
   }
 
   pid_t pid;
@@ -675,6 +675,7 @@ int main(int argc, char *argv[]) {
 
   if (pidFile.fail()) {
     cerr << "Error: Invalid PID in file." << endl;
+    ALOGE("Error: Invalid PID in file.");
   }
   pidFile.close();
 

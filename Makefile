@@ -23,9 +23,12 @@ check_lib:
 $(TARGET): $(SRCS) $(LIBS)
 	$(CC) $(CFLAGS) -o $(TARGET) $(SRCS) $(LIBS) $(LDFLAGS)
 
+test: $(SRCS) $(LIBS)
+	$(CC) $(CFLAGS) -g -o $(TARGET)_test $(SRCS) $(LIBS) $(LDFLAGS)
+
 # Clean rule
 clean:
 	rm -f $(TARGET)
 
 # PHONY targets
-.PHONY: all clean check_lib
+.PHONY: all clean check_lib test
