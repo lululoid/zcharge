@@ -408,8 +408,12 @@ void limiter_service(const string &db_file) {
         // Charging controller
         if (capacity >= capacity_limit && is_charging()) {
           ALOGI("Capacity limit reached (%d%%)", capacity_limit);
-          set_charging_switch(off_switch);
-          cooldown = true; // Cooldown before charging to capacity_limit again
+          // Inform user it's okay to remove charging now
+          notif("Capacity limit reached(%d%%), stopping charging...", capacity);
+          set_charging_switch(
+              off_switch); // Cooldown before charging to capacity_limit again
+                           // to reduce heat
+          cooldown = true;
           ALOGI("Cooldown to %d%% before recharging again", recharging_limit);
         } else if (capacity < recharging_limit && cooldown) {
           ALOGI("Battery level(%d%%) is dropped below recharging limit(%d%%)",
@@ -569,6 +573,33 @@ void daemonize_process(const string &zcharge_pid_file) {
   service_thread.join();
 }
 
+bool isProcessZcharge(pid_t pid) {
+  // Construct the path to the command line file in /proc/[PID]/cmdline
+  char cmdlinePath[PATH_MAX];
+  bool zcharge_proc;
+  snprintf(cmdlinePath, sizeof(cmdlinePath), "/proc/%d/cmdline", pid);
+
+  // Open the cmdline file
+  ifstream cmdlineFile(cmdlinePath, ios::in | ios::binary);
+  if (!cmdlineFile.is_open()) {
+    // If we cannot open the file, the process might not exist or we have no
+    // permissions
+    return false;
+  }
+
+  // Read the contents of the cmdline file
+  string cmdline;
+  getline(cmdlineFile, cmdline, '\0');
+
+  // Close the file
+  cmdlineFile.close();
+
+  // Check if the command line contains "zcharge"
+  zcharge_proc = cmdline.find("zcharge") != string::npos;
+  ALOGI("zcharge is running with cmdline: %s", cmdline.c_str());
+  return zcharge_proc;
+}
+
 int main(int argc, char *argv[]) {
   const string default_db_file = "/data/adb/zcharge/zcharge.db";
   const string zcharge_pid_file =
@@ -631,7 +662,27 @@ int main(int argc, char *argv[]) {
   }
 
   db_file = (argc == 2) ? argv[1] : default_db_file;
-  // Start limiter_service
+  // Start limiter_service if theres none
+  ifstream pidFile(zcharge_pid_file);
+
+  if (!pidFile.is_open()) {
+    cerr << "Error: Could not open PID file." << endl;
+    return EXIT_FAILURE;
+  }
+
+  pid_t pid;
+  pidFile >> pid; // Read the PID from the file
+
+  if (pidFile.fail()) {
+    cerr << "Error: Invalid PID in file." << endl;
+  }
+  pidFile.close();
+
+  if (isProcessZcharge(pid)) {
+    ALOGI("zcharge PID: %d", pid);
+    cout << "zcharge PID: " << pid << endl;
+    return EXIT_SUCCESS;
+  }
   daemonize_process(zcharge_pid_file);
 
   if (!thread_success) {
