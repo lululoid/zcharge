@@ -492,9 +492,42 @@ void update_config(sqlite3 *db, const string &key, const string &value) {
   }
 }
 
+void print_config(const string &db_file) {
+  sqlite3 *db;
+  if (sqlite3_open(db_file.c_str(), &db)) {
+    ALOGE("Can't open database: %s", sqlite3_errmsg(db));
+    return;
+  }
+
+  const char *sql = "SELECT key, value FROM zcharge_config;";
+  sqlite3_stmt *stmt;
+
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+    ALOGI("====== Zcharge configuration ======");
+    cout << "====== Zcharge configuration ======" << endl;
+
+    // Print each row in "key: value" format
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      string key = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+      string value =
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+      cout << key << ": " << value << endl;
+      ALOGD("%s: %s", key.c_str(), value.c_str());
+    }
+  } else {
+    ALOGE("Failed to execute query: %s", sqlite3_errmsg(db));
+  }
+
+  sqlite3_finalize(stmt);
+  sqlite3_close(db);
+}
+
 void print_usage() {
   cout << "Usage: zcharge [OPTIONS] [ARGS...]" << endl;
   cout << "Options:" << endl;
+  cout << "  --print                                  Print configuration "
+          "content"
+       << endl;
   cout << "  --convert <old_config> <new_config>      Convert the old "
           "configuration file to the new database format."
        << endl;
@@ -625,6 +658,9 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
   } else if (argc == 2 && string(argv[1]) == "--reload") {
     send_reload_signal(zcharge_pid_file);
+    return EXIT_SUCCESS;
+  } else if (argc == 2 && string(argv[1]) == "--print") {
+    print_config(default_db_file);
     return EXIT_SUCCESS;
   } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--enable") {
     string db_file = (argc == 3) ? argv[2] : default_db_file;
