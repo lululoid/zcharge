@@ -1,10 +1,13 @@
 # zcharge
+
 Simple module to limit charging capacity. This is my experiment coding in C++, jump straight using chatgpt, pretty fun.
 
-# Usage
+## Usage
+
 ```
 Usage: zcharge [OPTIONS] [ARGS...]
 Options:
+  --print                                  Print configuration content
   --convert <old_config> <new_config>      Convert the old configuration file to the new database format.
   --enable [config_db]                     Enable zcharge with the specified database file (or default).
   --disable [config_db]                    Disable zcharge with the specified database file (or default).

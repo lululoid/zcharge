@@ -673,8 +673,10 @@ int main(int argc, char *argv[]) {
   } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--disable") {
     string db_file = (argc == 3) ? argv[2] : default_db_file;
     sqlite3 *db = open_database(db_file);
+    on_switch = get_value_from_db(db, "charging_switch_on");
 
     update_config(db, "enabled", "0");
+    set_charging_switch(on_switch);
     sqlite3_close(db);
     ALOGI("zcharge disabled");
     return EXIT_SUCCESS;
