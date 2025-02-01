@@ -49,7 +49,7 @@ bool send_reload_signal(const string &zcharge_pid_file) {
   }
 
   if (kill(pid, SIGHUP) != 0) {
-    ALOGW("Failed to send SIGHUP to process with PID: %d", pid);
+    ALOGW("Failed to send SIGHUP to zcharge PID: %d. zcharge is down?", pid);
     return false;
   }
 
@@ -633,6 +633,37 @@ bool isProcessZcharge(pid_t pid) {
   return zcharge_proc;
 }
 
+int start_zcharge_service(string zcharge_pid_file) {
+  // Start limiter_service if theres none
+  ifstream pidFile(zcharge_pid_file);
+
+  if (!pidFile.is_open()) {
+    cerr << "Error: Could not open PID file." << endl;
+    ALOGE("Error: Could not open PID file.");
+  }
+
+  pid_t pid;
+  pidFile >> pid; // Read the PID from the file
+
+  if (pidFile.fail()) {
+    cerr << "Error: Invalid PID in file." << endl;
+    ALOGE("Error: Invalid PID in file.");
+  }
+  pidFile.close();
+
+  if (isProcessZcharge(pid)) {
+    ALOGI("zcharge PID: %d", pid);
+    cout << "zcharge PID: " << pid << endl;
+    return EXIT_SUCCESS;
+  }
+  daemonize_process(zcharge_pid_file);
+
+  if (!thread_success) {
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
+}
+
 int main(int argc, char *argv[]) {
   const string default_db_file = "/data/adb/zcharge/zcharge.db";
   const string zcharge_pid_file =
@@ -663,21 +694,24 @@ int main(int argc, char *argv[]) {
     print_config(default_db_file);
     return EXIT_SUCCESS;
   } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--enable") {
-    string db_file = (argc == 3) ? argv[2] : default_db_file;
+    db_file = (argc == 3) ? argv[2] : default_db_file;
     sqlite3 *db = open_database(db_file);
 
     update_config(db, "enabled", "1");
     sqlite3_close(db);
     ALOGD("zcharge enabled");
+    start_zcharge_service(zcharge_pid_file);
     return EXIT_SUCCESS;
   } else if ((argc == 3 || argc == 2) && string(argv[1]) == "--disable") {
     string db_file = (argc == 3) ? argv[2] : default_db_file;
     sqlite3 *db = open_database(db_file);
     on_switch = get_value_from_db(db, "charging_switch_on");
+    charging_switch_path = get_value_from_db(db, "charging_switch_path");
 
     update_config(db, "enabled", "0");
     set_charging_switch(on_switch);
     sqlite3_close(db);
+    send_reload_signal(zcharge_pid_file);
     ALOGI("zcharge disabled");
     return EXIT_SUCCESS;
   } else if ((argc == 3 || argc == 4) && string(argv[1]) == "--update") {
@@ -698,34 +732,12 @@ int main(int argc, char *argv[]) {
     sqlite3_close(db);
     return EXIT_SUCCESS;
   }
-
   db_file = (argc == 2) ? argv[1] : default_db_file;
-  // Start limiter_service if theres none
-  ifstream pidFile(zcharge_pid_file);
-
-  if (!pidFile.is_open()) {
-    cerr << "Error: Could not open PID file." << endl;
-    ALOGE("Error: Could not open PID file.");
+  sqlite3 *db = open_database(db_file);
+  int enabled = stoi(get_value_from_db(db, "enabled")) == 1;
+  if (!enabled) {
+    cerr << "Zcharge is disabled. zcharge --enable to start service" << endl;
   }
-
-  pid_t pid;
-  pidFile >> pid; // Read the PID from the file
-
-  if (pidFile.fail()) {
-    cerr << "Error: Invalid PID in file." << endl;
-    ALOGE("Error: Invalid PID in file.");
-  }
-  pidFile.close();
-
-  if (isProcessZcharge(pid)) {
-    ALOGI("zcharge PID: %d", pid);
-    cout << "zcharge PID: " << pid << endl;
-    return EXIT_SUCCESS;
-  }
-  daemonize_process(zcharge_pid_file);
-
-  if (!thread_success) {
-    return EXIT_FAILURE;
-  }
-  return EXIT_SUCCESS;
+  sqlite3_close(db);
+  start_zcharge_service(zcharge_pid_file);
 }
